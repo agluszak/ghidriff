@@ -1425,7 +1425,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
         """
 
-        default_labels = ['LAB', 'DAT', 'SUB', 'UNK', 'EXT', 'FUN_', 'OFF_']
+        default_labels = ['LAB', 'DAT', 'SUB', 'UNK', 'EXT', 'FUN', 'OFF']
 
         matches = {}
         for i, line in enumerate(code):
