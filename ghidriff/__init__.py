@@ -2,12 +2,12 @@ __version__ = '1.0.0'
 __author__ = 'clearbluejar'
 
 # Expose API
-from .ghidra_diff_engine import DecompileResult, GhidraDiffEngine
+from .ghidra_diff_engine import DecompileResult, FunctionMatch, GhidraDiffEngine
 from .version_tracking_diff import VersionTrackingDiff
 from .simple_diff import SimpleDiff
 from .structural_graph_diff import StructualGraphDiff
 from .parser import get_parser, get_engine_classes
 
 __all__ = [
-    "DecompileResult", "GhidraDiffEngine", "SimpleDiff", "StructualGraphDiff", "VersionTrackingDiff", "get_parser", "get_engine_classes"
+    "DecompileResult", "FunctionMatch", "GhidraDiffEngine", "SimpleDiff", "StructualGraphDiff", "VersionTrackingDiff", "get_parser", "get_engine_classes"
 ]

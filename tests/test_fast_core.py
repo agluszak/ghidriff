@@ -7,7 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from ghidriff import DecompileResult, GhidraDiffEngine, get_parser
+from ghidriff import DecompileResult, FunctionMatch, GhidraDiffEngine, get_parser
 from ghidriff.utils import get_pe_extra_data
 
 
@@ -360,6 +360,97 @@ def test_enhance_sym_lazily_adds_decompiler_fields(monkeypatch):
     assert enriched['decomp_completed'] is True
     assert enriched['instructions'] == ['RET']
     assert enriched['mnemonics'] == ['RET']
+
+
+class _FakePairFunction:
+    def __init__(self, entry):
+        self.entry = entry
+        self.symbol = f'symbol:{entry}'
+
+    def getEntryPoint(self):
+        return self.entry
+
+    def getSymbol(self):
+        return self.symbol
+
+
+class _FakePairFunctionManager:
+    def __init__(self, entries):
+        self.functions = {entry: _FakePairFunction(entry) for entry in entries}
+
+    def getFunctionAt(self, address):
+        return self.functions.get(address)
+
+
+class _FakeAddressSpace:
+    def getAddress(self, offset):
+        return f'0x{offset:x}'
+
+
+class _FakeAddressFactory:
+    def getAddress(self, address):
+        return address
+
+    def getDefaultAddressSpace(self):
+        return _FakeAddressSpace()
+
+
+class _FakePairProgram:
+    def __init__(self, entries):
+        self.manager = _FakePairFunctionManager(entries)
+
+    def getAddressFactory(self):
+        return _FakeAddressFactory()
+
+    def getFunctionManager(self):
+        return self.manager
+
+
+def test_resolve_function_matches_preserves_provenance():
+    assert FunctionMatch('0x1000', '0x2000', 'reccmp').provenance == ('reccmp',)
+    engine = object.__new__(_FastEngine)
+    old = _FakePairProgram(['0x1000'])
+    new = _FakePairProgram(['0x2000'])
+
+    resolved = engine.resolve_function_matches(
+        old,
+        new,
+        [FunctionMatch(0x1000, '0x2000', ('reccmp', 'symbol'))],
+    )
+
+    assert resolved == [['symbol:0x1000', 'symbol:0x2000', ['reccmp', 'symbol']]]
+
+
+def test_resolve_function_matches_rejects_missing_and_duplicate_pairs():
+    engine = object.__new__(_FastEngine)
+    old = _FakePairProgram(['0x1000'])
+    new = _FakePairProgram(['0x2000', '0x3000'])
+
+    with pytest.raises(ValueError, match='does not resolve'):
+        engine.resolve_function_matches(old, new, [FunctionMatch('0x9999', '0x2000')])
+
+    with pytest.raises(ValueError, match='one-to-one'):
+        engine.resolve_function_matches(
+            old,
+            new,
+            [FunctionMatch('0x1000', '0x2000'), FunctionMatch('0x1000', '0x3000')],
+        )
+
+
+def test_diff_pairs_routes_matches_through_standard_pipeline():
+    engine = object.__new__(_FastEngine)
+    matches = [FunctionMatch('0x1000', '0x2000')]
+    calls = []
+    engine.diff_bins = lambda old, new, **kwargs: calls.append((old, new, kwargs)) or {'functions': {}}
+
+    result = engine.diff_pairs('old.exe', 'new.exe', matches, force_diff=True)
+
+    assert result == {'functions': {}}
+    assert calls == [('old.exe', 'new.exe', {
+        'ignore_FUN': False,
+        'force_diff': True,
+        'function_matches': matches,
+    })]
 
 
 class _FakeSymbolTable:
