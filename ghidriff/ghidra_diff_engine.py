@@ -63,6 +63,17 @@ class DecompileResult:
     code: str
 
 
+@dataclass(frozen=True)
+class FunctionMatch:
+    old_address: object
+    new_address: object
+    provenance: Tuple[str, ...] = ('Provided',)
+
+    def __post_init__(self):
+        provenance = (self.provenance,) if isinstance(self.provenance, str) else tuple(self.provenance)
+        object.__setattr__(self, 'provenance', provenance or ('Provided',))
+
+
 class EnhancedSymbol(dict):
     def __init__(self, *args, decomp_enriched=False, calling_counts_enriched=False, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1311,6 +1322,42 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
         return funcs
 
+    @staticmethod
+    def _resolve_function_address(
+        program: "ghidra.program.model.listing.Program",
+        address,
+    ) -> 'ghidra.program.model.listing.Function':
+        if isinstance(address, str):
+            address = program.getAddressFactory().getAddress(address)
+        elif isinstance(address, int):
+            address = program.getAddressFactory().getDefaultAddressSpace().getAddress(address)
+        if address is None:
+            return None
+        return program.getFunctionManager().getFunctionAt(address)
+
+    def resolve_function_matches(
+        self,
+        p1: "ghidra.program.model.listing.Program",
+        p2: "ghidra.program.model.listing.Program",
+        matches: List[FunctionMatch],
+    ) -> list:
+        resolved = []
+        old_entries = set()
+        new_entries = set()
+        for match in matches:
+            old_func = self._resolve_function_address(p1, match.old_address)
+            new_func = self._resolve_function_address(p2, match.new_address)
+            if old_func is None or new_func is None:
+                raise ValueError(f'Provided function match does not resolve: {match.old_address} -> {match.new_address}')
+            old_entry = old_func.getEntryPoint()
+            new_entry = new_func.getEntryPoint()
+            if old_entry in old_entries or new_entry in new_entries:
+                raise ValueError(f'Provided function matches must be one-to-one: {match.old_address} -> {match.new_address}')
+            old_entries.add(old_entry)
+            new_entries.add(new_entry)
+            resolved.append([old_func.getSymbol(), new_func.getSymbol(), list(match.provenance)])
+        return resolved
+
     @abstractmethod
     def find_matches(
             self,
@@ -1515,17 +1562,29 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
                 "Check Ghidra analysis/PDB loading, or use --force-diff to bypass this preflight."
             )
 
+    def diff_pairs(
+        self,
+        old: Union[str, Path],
+        new: Union[str, Path],
+        matches: List[FunctionMatch],
+        ignore_FUN: bool = False,
+        force_diff=False,
+    ) -> dict:
+        """Diff only the supplied function pairs while retaining the standard report format."""
+        return self.diff_bins(old, new, ignore_FUN=ignore_FUN, force_diff=force_diff, function_matches=matches)
+
     def diff_bins(
             self,
             old: Union[str, Path],
             new: Union[str, Path],
             ignore_FUN: bool = False,
-            force_diff=False
+            force_diff=False,
+            function_matches: List[FunctionMatch] = None,
     ) -> dict:
         """
         Diff the old and new binary from the GhidraProject.
         ignore_FUN : skip nameless functions matching names containing "FUN_". Useful for increasing speed of diff.
-        last_attempt : flag to prevent infinte loop on recursive instances
+        function_matches : provided function pairs that bypass automatic matching.
         """
 
         self.logger.info(f'Diffing bins: {old} - {new}')
@@ -1580,7 +1639,12 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         unmatched_nf_syms, _ = self.diff_nf_symbols(p1, p2)
 
         # Find functions matches
-        unmatched, matched, skip_types = self.find_matches(p1, p2)
+        if function_matches is None:
+            unmatched, matched, skip_types = self.find_matches(p1, p2)
+        else:
+            unmatched = []
+            matched = self.resolve_function_matches(p1, p2, function_matches)
+            skip_types = []
 
         self.logger.info('Generating matches json...')
         address_matches = {}
@@ -1824,7 +1888,10 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         items_to_process = len(added_funcs) + len(deleted_funcs) + len(modified_funcs) + \
             len(symbols['added']) + len(symbols['deleted'])
         unmatched_funcs_len = len(added_funcs) + len(deleted_funcs)
-        total_funcs_len = p1.functionManager.functionCount + p2.functionManager.functionCount
+        if function_matches is None:
+            total_funcs_len = p1.functionManager.functionCount + p2.functionManager.functionCount
+        else:
+            total_funcs_len = len(matched) * 2
         matched_funcs_len = total_funcs_len - unmatched_funcs_len
         matched_funcs_with_code_changes_len = len(
             [mod_func for mod_func in modified_funcs if 'code' in mod_func['diff_type']])
