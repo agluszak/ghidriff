@@ -13,7 +13,7 @@ import concurrent.futures
 from queue import Queue
 from threading import Lock, RLock
 from types import SimpleNamespace
-from typing import List, Tuple, Union, TYPE_CHECKING
+from typing import List, Optional, Tuple, Union, TYPE_CHECKING
 from argparse import Namespace
 import logging
 
@@ -707,7 +707,8 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
     def setup_decompliers(
         self,
         p1: "ghidra.program.model.listing.Program",
-        p2: "ghidra.program.model.listing.Program"
+        p2: "ghidra.program.model.listing.Program",
+        pair_count: Optional[int] = None,
     ) -> bool:
         """
         Setup decompliers to use during diff bins. Each one must be initialized with a program.
@@ -728,6 +729,8 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         p2_options.setMaxPayloadMBytes(100)
 
         per_prog = self.max_workers if self.threaded else 1
+        if pair_count is not None:
+            per_prog = min(per_prog, max(1, pair_count))
         decompiler_count = 0
         for prog, options in ((p1, p1_options), (p2, p2_options)):
             key = self._program_key(prog)
@@ -1643,7 +1646,9 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             p2 = self.project.openProgram("/", p2_name, True)
 
         # setup decompilers
-        self.setup_decompliers(p1, p2)
+        self.setup_decompliers(
+            p1, p2, len(function_matches) if function_matches is not None else None
+        )
 
         self.logger.info(f"Loaded old program: {p1.name}")
         self.logger.info(f"Loaded new program: {p2.name}")
