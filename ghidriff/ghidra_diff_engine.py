@@ -1434,10 +1434,12 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         matches = {}
 
         def rename(match: re.Match) -> str:
+            prefix = match.group(1)
+            labels = matches.setdefault(prefix, {})
             label = match.group(0)
-            if label not in matches:
-                matches[label] = f'{match.group(1)}_{len(matches)}'
-            return matches[label]
+            if label not in labels:
+                labels[label] = f'{prefix}_{len(labels)}'
+            return labels[label]
 
         for i, line in enumerate(code):
             code[i] = GhidraDiffEngine.DEFAULT_LABEL.sub(rename, line)

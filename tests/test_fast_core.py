@@ -221,7 +221,7 @@ def test_normalize_ghidra_decomp_renames_every_label_on_a_line():
     GhidraDiffEngine.normalize_ghidra_decomp(None, code)
 
     assert code == [
-        "  DAT_0 = FUN_1(DAT_2, PTR_DAT_3);\n",
-        "  if (DAT_2 != 0) goto LAB_4;\n",
+        "  DAT_0 = FUN_0(DAT_1, PTR_DAT_2);\n",
+        "  if (DAT_1 != 0) goto LAB_0;\n",
         "  rc_MyDAT_00ff(_DAT_0);\n",
     ]
