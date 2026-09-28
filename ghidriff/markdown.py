@@ -10,6 +10,26 @@ from mdutils.mdutils import MdUtils
 from mdutils.tools.TableOfContents import TableOfContents
 
 
+class _BufferedMdUtils(MdUtils):
+    """Collect report sections before joining the finished document.
+
+    MdUtils appends every section to an attribute string. A large diff has
+    thousands of sections, so repeatedly copying the accumulated report
+    dominates rendering time.
+    """
+
+    def __init__(self, file_name: str, title: str = "") -> None:
+        super().__init__(file_name, title=title)
+        self._sections = []
+
+    def _MdUtils___update_file_data(self, section: str) -> None:
+        self._sections.append(section)
+
+    def get_md_text(self) -> str:
+        self.file_data_text = "".join(self._sections)
+        return super().get_md_text()
+
+
 class GhidriffMarkdown:
 
     def __init__(self, logging=logging.INFO) -> None:
@@ -595,7 +615,7 @@ pie showData
         else:
             title = f"{old_name}-{new_name} Diff"
 
-        md = MdUtils('diff', title=title)
+        md = _BufferedMdUtils('diff', title=title)
 
         # change title to atx style
         md.title = md.header.choose_header(level=1, title=title, style='atx')
