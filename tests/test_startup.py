@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from ghidriff import GhidraDiffEngine
 # from mock import patch
 from pytest import MonkeyPatch
@@ -10,9 +13,11 @@ def test_pyghidra_start():
 
 
 def test_ghidra_install_dir():
-    import os
-    install_dir = os.getenv("GHIDRA_INSTALL_DIR")
-    assert install_dir == "/ghidra"
+    install_dir = Path(os.environ["GHIDRA_INSTALL_DIR"])
+    properties = install_dir / 'Ghidra' / 'application.properties'
+
+    assert properties.is_file()
+    assert 'application.version=12.1.4' in properties.read_text()
 
 
 # @pytest.fixture
