@@ -1854,8 +1854,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             if ematch_1['sig'] != ematch_2['sig']:
                 diff_type.append('sig')
 
-            if ematch_1['address'] != ematch_2['address'] and 'ExactBytesFunctionHasher' not in match_types:
-                diff_type.append('address')
+            address_changed = ematch_1['address'] != ematch_2['address']
 
             if not (len(ematch_1['calling']) == len(ematch_2['calling']) and len(set(ematch_2['calling']).union(set(ematch_1['calling']))) == len(ematch_1['calling'])):
                 diff_type.append('calling')
@@ -1865,6 +1864,9 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
             if ematch_1['parent'] != ematch_2['parent']:
                 diff_type.append('parent')
+
+            if diff_type and address_changed and 'ExactBytesFunctionHasher' not in match_types:
+                diff_type.append('address')
 
             # if no differences were found, there should not be a match (see modified func ident)
             if len(diff_type) == 0:
