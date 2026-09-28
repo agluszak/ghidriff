@@ -745,6 +745,20 @@ def test_normalize_ghidra_decomp_renames_every_label_on_a_line():
     ]
 
 
+def test_normalize_ghidra_decomp_export_comment_rva():
+    code = [
+        '                    /* 0x1000  1941  ?srAssertSetFunc@@YAXP6AXPBD0J0@Z@Z */\n',
+        '  return 0x1000;\n',
+    ]
+
+    GhidraDiffEngine.normalize_ghidra_decomp(None, code)
+
+    assert code == [
+        '                    /* RVA  1941  ?srAssertSetFunc@@YAXP6AXPBD0J0@Z@Z */\n',
+        '  return 0x1000;\n',
+    ]
+
+
 def test_normalize_ghidra_decomp_address_labels():
     code = [
         'switchD_00401000_caseD_1: goto joined_r0x00402000;\n',

@@ -1509,6 +1509,10 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         r'(?![0-9A-Za-z_])'
     )
 
+    # Ghidra's PE loader comments each export as "<rva>  <ordinal>  <name>".
+    # The ordinal and name are export facts; the RVA only restates placement.
+    EXPORT_COMMENT_RVA = re.compile(r'(?<![0-9A-Za-z_])0x[0-9a-fA-F]+(?=  \d+  \S)')
+
     def normalize_ghidra_decomp(self, code: list):
         """
         Normalize some of the dynamic labels to simplify the diff
@@ -1539,7 +1543,8 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
         for i, line in enumerate(code):
             line = GhidraDiffEngine.DEFAULT_LABEL.sub(rename, line)
-            code[i] = GhidraDiffEngine.ADDRESS_LABEL.sub(rename_address_label, line)
+            line = GhidraDiffEngine.ADDRESS_LABEL.sub(rename_address_label, line)
+            code[i] = GhidraDiffEngine.EXPORT_COMMENT_RVA.sub('RVA', line)
 
     def remove_code_sig(self, code, split_char='{'):
         """
