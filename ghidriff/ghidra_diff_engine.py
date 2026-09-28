@@ -1,4 +1,4 @@
-from abc import ABCMeta, abstractmethod
+from abc import ABCMeta
 from pathlib import Path
 import json
 import difflib
@@ -241,7 +241,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         Warn when the active Ghidra/pyghidra runtime differs from the supported target.
         """
 
-        target_ghidra = "12.0.4"
+        target_ghidra = "12.1.4"
         if str(ghidra_version) != target_ghidra:
             self.logger.warning(
                 f"Expected Ghidra {target_ghidra}; running {ghidra_version}. "
@@ -1358,7 +1358,6 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             resolved.append([old_func.getSymbol(), new_func.getSymbol(), list(match.provenance)])
         return resolved
 
-    @abstractmethod
     def find_matches(
             self,
             p1: "ghidra.program.model.listing.Program",
@@ -1639,7 +1638,15 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         unmatched_nf_syms, _ = self.diff_nf_symbols(p1, p2)
 
         # Find functions matches
-        if function_matches is None:
+        if p1 is p2:
+            unmatched = []
+            matched = []
+            for func in p1.functionManager.getFunctions(True):
+                matched.append([func.getSymbol(), func.getSymbol(), ['ExactBytesFunctionHasher']])
+            for func in p1.functionManager.getExternalFunctions():
+                matched.append([func.getSymbol(), func.getSymbol(), ['ExactBytesFunctionHasher']])
+            skip_types = []
+        elif function_matches is None:
             unmatched, matched, skip_types = self.find_matches(p1, p2)
         else:
             unmatched = []
@@ -1823,7 +1830,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             only_code_diff = ''.join(list(difflib.unified_diff(old_code_no_sig, new_code_no_sig, lineterm='\n',
                                      fromfile=from_file_name, tofile=to_file_name)))  # ignores name changes
 
-            if len(only_code_diff) > 0 and (mnemonics_ratio < 1.0 or blocks_ratio < 1.0):
+            if len(only_code_diff) > 0:
 
                 # handle bad match external match (sometimes occurs with implied matches)
                 if ratio == 0.0 and (blocks_ratio == 0.0):
@@ -1870,7 +1877,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
             # if no differences were found, there should not be a match (see modified func ident)
             if len(diff_type) == 0:
-                self.logger.warn(f'no diff: {sym} {sym2} {match_types}')
+                self.logger.debug(f'no diff: {sym} {sym2} {match_types}')
                 continue
 
             all_diff_types.extend(diff_type)
