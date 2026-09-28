@@ -1,10 +1,13 @@
 import argparse
+import logging
 from pathlib import Path
-from types import SimpleNamespace
+import sys
+from threading import Lock
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from ghidriff import GhidraDiffEngine, get_parser
+from ghidriff import DecompileResult, GhidraDiffEngine, get_parser
 from ghidriff.utils import get_pe_extra_data
 
 
@@ -57,6 +60,56 @@ def test_remove_code_sig_always_returns_list_of_strings():
     assert missing == []
 
 
+class _FakeDecompiledFunction:
+    def getC(self):
+        return 'int demo(void) { return 1; }'
+
+
+class _FakeDecompileResults:
+    def __init__(self, completed, message='', timed_out=False, cancelled=False):
+        self.completed = completed
+        self.message = message
+        self.timed_out = timed_out
+        self.cancelled = cancelled
+
+    def getErrorMessage(self):
+        return self.message
+
+    def decompileCompleted(self):
+        return self.completed
+
+    def isTimedOut(self):
+        return self.timed_out
+
+    def isCancelled(self):
+        return self.cancelled
+
+    def getDecompiledFunction(self):
+        return _FakeDecompiledFunction()
+
+
+def test_completed_decompile_keeps_code_when_ghidra_reports_a_warning():
+    result = GhidraDiffEngine._read_decompile_results(
+        _FakeDecompileResults(True, 'Could not recover jumptable')
+    )
+
+    assert result.completed
+    assert result.error is None
+    assert result.warnings == ('Could not recover jumptable',)
+    assert result.code == 'int demo(void) { return 1; }'
+
+
+def test_incomplete_decompile_returns_structured_failure():
+    result = GhidraDiffEngine._read_decompile_results(
+        _FakeDecompileResults(False, timed_out=True)
+    )
+
+    assert not result.completed
+    assert result.timed_out
+    assert result.error == 'Decompiler did not complete'
+    assert result.code == ''
+
+
 def test_pe_extra_data_rejects_non_pe_file(tmp_path: Path):
     not_a_pe = tmp_path / "not-a-pe.bin"
     not_a_pe.write_text("not a PE")
@@ -89,6 +142,9 @@ class _FakeBody:
 class _FakeFunc:
     body = _FakeBody()
 
+    def getSignature(self, include_namespace):
+        return 'void demo(void)'
+
 
 class _FakeFunctionManager:
     def getFunctionAt(self, address):
@@ -104,6 +160,9 @@ class _FakeSymbol:
     program = _FakeProgram()
     referenceCount = 1
 
+    def getName(self, include_namespace=False):
+        return 'demo'
+
 
 class _FastEngine(GhidraDiffEngine):
     def find_matches(self, p1, p2):
@@ -114,16 +173,24 @@ def test_broad_hash_matches_still_get_diffed_for_small_function_changes():
     engine = object.__new__(_FastEngine)
     engine.min_func_len = 8
 
+    old = _FakeSymbol()
+    new = _FakeSymbol()
     assert GhidraDiffEngine.syms_need_diff(
         engine,
-        _FakeSymbol(),
-        _FakeSymbol(),
+        old,
+        new,
         ["StructuralGraphHash"],
         [],
     ) is True
+    assert GhidraDiffEngine.syms_need_decomp(
+        engine,
+        old,
+        new,
+        ["StructuralGraphHash"],
+    ) is True
 
 
-def test_exact_instruction_matches_can_skip_deeper_diff_when_metadata_matches():
+def test_exact_instruction_matches_still_get_deep_diffed():
     engine = object.__new__(_FastEngine)
     engine.min_func_len = 10
 
@@ -133,7 +200,166 @@ def test_exact_instruction_matches_can_skip_deeper_diff_when_metadata_matches():
         _FakeSymbol(),
         ["ExactInstructionsFunctionHasher"],
         [],
+    ) is True
+
+
+def test_exact_byte_matches_skip_decompilation_but_not_metadata_diffing():
+    engine = object.__new__(_FastEngine)
+    engine.min_func_len = 10
+    old = _FakeSymbol()
+    new = _FakeSymbol()
+
+    assert GhidraDiffEngine.syms_need_diff(
+        engine,
+        old,
+        new,
+        ["ExactBytesFunctionHasher"],
+        [],
     ) is False
+    assert GhidraDiffEngine.syms_need_decomp(
+        engine,
+        old,
+        new,
+        ["ExactBytesFunctionHasher"],
+    ) is False
+
+    new.referenceCount = 2
+    assert GhidraDiffEngine.syms_need_diff(
+        engine,
+        old,
+        new,
+        ["ExactBytesFunctionHasher"],
+        [],
+    ) is True
+
+
+class _FakeCodeUnit:
+    mnemonicString = 'RET'
+
+    def __str__(self):
+        return 'RET'
+
+    def getMnemonicString(self):
+        return self.mnemonicString
+
+
+class _FakeListing:
+    def getCodeUnits(self, body, forward):
+        return [_FakeCodeUnit()]
+
+
+class _FakeCachedFunction:
+    external = False
+    parameterCount = 0
+    body = _FakeBody()
+
+    def __init__(self, program):
+        self.program = program
+
+    def getProgram(self):
+        return self.program
+
+    def getBody(self):
+        return self.body
+
+    def getCalledFunctions(self, monitor):
+        return []
+
+    def getCallingFunctions(self, monitor):
+        return []
+
+    def getSignature(self, include_namespace):
+        return 'void demo(void)'
+
+
+class _FakeCachedFunctionManager:
+    def __init__(self, program):
+        self.function = _FakeCachedFunction(program)
+
+    def getFunctionAt(self, address):
+        return self.function
+
+
+class _FakeCachedProgram:
+    def __init__(self):
+        self.functionManager = _FakeCachedFunctionManager(self)
+        self.listing = _FakeListing()
+
+    def getDomainFile(self):
+        return None
+
+    def getListing(self):
+        return self.listing
+
+
+class _FakeNamespace:
+    def toString(self):
+        return 'Global'
+
+
+class _FakeCachedSymbol:
+    iD = 1
+    address = '0x1000'
+    symbolType = 'function'
+    source = 'USER_DEFINED'
+    external = False
+    referenceCount = 0
+
+    def __init__(self, program):
+        self.program = program
+
+    def getName(self, include_namespace=False):
+        return 'demo'
+
+    def getParentNamespace(self):
+        return _FakeNamespace()
+
+    def getReferenceCount(self):
+        return self.referenceCount
+
+    def getAddress(self):
+        return self.address
+
+    def getSymbolType(self):
+        return self.symbolType
+
+
+class _FakeBasicBlockModel:
+    def __init__(self, program, include_externals):
+        pass
+
+    def getCodeBlocksContaining(self, body, monitor):
+        return []
+
+
+def test_enhance_sym_lazily_adds_decompiler_fields(monkeypatch):
+    symbol_module = ModuleType('ghidra.program.model.symbol')
+    symbol_module.SymbolType = SimpleNamespace(FUNCTION='function')
+    task_module = ModuleType('ghidra.util.task')
+    task_module.ConsoleTaskMonitor = object
+    block_module = ModuleType('ghidra.program.model.block')
+    block_module.BasicBlockModel = _FakeBasicBlockModel
+    monkeypatch.setitem(sys.modules, 'ghidra.program.model.symbol', symbol_module)
+    monkeypatch.setitem(sys.modules, 'ghidra.util.task', task_module)
+    monkeypatch.setitem(sys.modules, 'ghidra.program.model.block', block_module)
+
+    engine = object.__new__(_FastEngine)
+    engine.esym_memo = {}
+    engine.esym_memo_lock = Lock()
+    engine.logger = logging.getLogger('test')
+    engine.decompile_func = lambda program, function, timeout: DecompileResult(
+        True, False, False, None, (), 'int demo(void) { return 1; }'
+    )
+    symbol = _FakeCachedSymbol(_FakeCachedProgram())
+
+    cheap = engine.enhance_sym(symbol, get_decomp_info=False)
+    enriched = engine.enhance_sym(symbol, get_decomp_info=True)
+
+    assert cheap is enriched
+    assert enriched['code'] == 'int demo(void) { return 1; }'
+    assert enriched['decomp_completed'] is True
+    assert enriched['instructions'] == ['RET']
+    assert enriched['mnemonics'] == ['RET']
 
 
 class _FakeSymbolTable:

@@ -32,7 +32,7 @@ class StructualGraphDiff(GhidraDiffEngine):
             """
             Builds tuple from symbol (parent, name, refcount, length, paramcount)
             """
-            key = f'{sym.getID()}-{sym.getProgram().getName()}'
+            key = (sym.getID(), self._program_key(sym.getProgram()))
 
             if compare_key_memo.get(key) is None:
 
@@ -146,7 +146,7 @@ class StructualGraphDiff(GhidraDiffEngine):
         from collections import Counter
 
         p1_funcs_vals = Counter(p1_funcs.values())
-        p2_funcs_vals = Counter(p1_funcs.values())
+        p2_funcs_vals = Counter(p2_funcs.values())
 
         count_non_unique = 0
         for key, val in p1_funcs_vals.items():
@@ -197,21 +197,6 @@ class StructualGraphDiff(GhidraDiffEngine):
         self.logger.info("\nmodified_new_modified")
         for sym in p2_modified:
             self.logger.info(sym)
-
-        # Find modified functions based on compare_key
-        for sym in p1.getSymbolTable().getDefinedSymbols():
-
-            if "function".lower() in sym.getSymbolType().toString().lower():
-                func = p1.functionManager.getFunctionAt(sym.getAddress())
-                if (_get_compare_key2(sym, func)) in modified_old:
-                    p1_modified.append(sym)
-
-        for sym in p2.getSymbolTable().getDefinedSymbols():
-
-            if "function".lower() in sym.getSymbolType().toString().lower():
-                func = p2.functionManager.getFunctionAt(sym.getAddress())
-                if (_get_compare_key2(sym, func)) in modified_new:
-                    p2_modified.append(sym)
 
         matched = []
         unmatched = []
