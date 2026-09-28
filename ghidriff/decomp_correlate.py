@@ -1,3 +1,4 @@
+import hashlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -7,47 +8,44 @@ if TYPE_CHECKING:
 
 def decomp_correlate(self, matches, p1_missing, p2_missing, p1_matches, p2_matches):
     """
-    from all of the unmatched functions remaining, see if any should be matched by decomp
-    This is slow, but sometimes necessary
+    Match unique normalized decompilations among the remaining unmatched functions.
     """
 
     # only attempt if there is something to match
-    if len(p1_missing) > 0 and len(p2_missing) > 0:
+    if len(p1_missing) == 0 or len(p2_missing) == 0:
+        return
 
-        self.logger.info(f'Attempting to Decomp Correlate unmatched functions p1:{len(p1_missing)} p2:{len(p1_missing)}')
+    self.logger.info(f'Attempting to Decomp Correlate unmatched functions p1:{len(p1_missing)} p2:{len(p2_missing)}')
 
-        for p1_func in p1_missing:
-
-            # skip already matched functions
-            if p1_matches.contains(p1_func.getEntryPoint()):
+    def group_decompilations(functions, accepted):
+        groups = {}
+        for func in functions:
+            if accepted.contains(func.getEntryPoint()):
                 continue
-
-            esym1 = self.enhance_sym(p1_func.getSymbol(), get_decomp_info=True)
-            if not esym1['decomp_completed']:
+            esym = self.enhance_sym(func.getSymbol(), get_decomp_info=True)
+            if not esym['decomp_completed']:
                 continue
-            decomp1 = esym1['code']
+            normalized = tuple(self.remove_code_sig(esym['code']))
+            digest = hashlib.sha256(''.join(normalized).encode('utf-8')).digest()
+            groups.setdefault(digest, []).append((func, normalized))
+        return groups
 
-            for p2_func in p2_missing:
+    p1_groups = group_decompilations(p1_missing, p1_matches)
+    p2_groups = group_decompilations(p2_missing, p2_matches)
 
-                # skip already matched functions
-                if p2_matches.contains(p2_func.getEntryPoint()):
-                    continue
+    for digest, p1_group in p1_groups.items():
+        p2_group = p2_groups.get(digest, [])
+        if len(p1_group) != 1 or len(p2_group) != 1:
+            continue
+        p1_func, decomp1 = p1_group[0]
+        p2_func, decomp2 = p2_group[0]
+        if decomp1 != decomp2:
+            continue
 
-                esym2 = self.enhance_sym(p2_func.getSymbol(), get_decomp_info=True)
-                if not esym2['decomp_completed']:
-                    continue
-                decomp2 = esym2['code']
-
-                if self.remove_code_sig(decomp1) == self.remove_code_sig(decomp2):
-
-                    # Correlate function Same Decomp
-                    name = 'Decomp Match'
-                    p1_addr = p1_func.getEntryPoint()
-                    p2_addr = p2_func.getEntryPoint()
-                    matches.setdefault((p1_addr, p2_addr), {}).setdefault(name, 0)
-                    matches[(p1_addr, p2_addr)][name] += 1
-                    p1_matches.add(p1_addr)
-                    p2_matches.add(p2_addr)
-
-                    # break to find the next match
-                    break
+        name = 'Decomp Match'
+        p1_addr = p1_func.getEntryPoint()
+        p2_addr = p2_func.getEntryPoint()
+        matches.setdefault((p1_addr, p2_addr), {}).setdefault(name, 0)
+        matches[(p1_addr, p2_addr)][name] += 1
+        p1_matches.add(p1_addr)
+        p2_matches.add(p2_addr)
