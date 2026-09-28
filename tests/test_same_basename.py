@@ -90,9 +90,10 @@ def test_same_basename_binaries_get_separate_decompiler_pools(shared_datadir: Pa
 
             func1 = p1.getFunctionManager().getFunctions(True).next()
 
-            error, code = engine.decompile_func(p1, func1, timeout=60)
-            assert error == ''
-            assert code
+            result = engine.decompile_func(p1, func1, timeout=60)
+            assert result.completed
+            assert result.error is None
+            assert result.code
 
             # control: a dedicated decompiler bound to p1 directly
             from ghidra.app.decompiler import DecompInterface
@@ -106,7 +107,7 @@ def test_same_basename_binaries_get_separate_decompiler_pools(shared_datadir: Pa
             finally:
                 control.closeProgram()
 
-            assert code == expected
+            assert result.code == expected
         finally:
             engine.shutdown_decompilers(p1, p2)
     finally:

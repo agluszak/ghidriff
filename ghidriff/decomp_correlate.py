@@ -22,7 +22,10 @@ def decomp_correlate(self, matches, p1_missing, p2_missing, p1_matches, p2_match
             if p1_matches.contains(p1_func.getEntryPoint()):
                 continue
 
-            decomp1 = self.enhance_sym(p1_func.getSymbol(), get_decomp_info=True)['code']
+            esym1 = self.enhance_sym(p1_func.getSymbol(), get_decomp_info=True)
+            if not esym1['decomp_completed']:
+                continue
+            decomp1 = esym1['code']
 
             for p2_func in p2_missing:
 
@@ -30,7 +33,10 @@ def decomp_correlate(self, matches, p1_missing, p2_missing, p1_matches, p2_match
                 if p2_matches.contains(p2_func.getEntryPoint()):
                     continue
 
-                decomp2 = self.enhance_sym(p2_func.getSymbol(), get_decomp_info=True)['code']
+                esym2 = self.enhance_sym(p2_func.getSymbol(), get_decomp_info=True)
+                if not esym2['decomp_completed']:
+                    continue
+                decomp2 = esym2['code']
 
                 if self.remove_code_sig(decomp1) == self.remove_code_sig(decomp2):
 

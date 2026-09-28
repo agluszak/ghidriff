@@ -6,11 +6,12 @@ import argparse
 import re
 from time import time
 from datetime import datetime
+from dataclasses import dataclass
 from collections import Counter
 from importlib.metadata import PackageNotFoundError, version
 import concurrent.futures
 from queue import Queue
-from threading import Lock
+from threading import Lock, RLock
 from types import SimpleNamespace
 from typing import List, Tuple, Union, TYPE_CHECKING
 from argparse import Namespace
@@ -50,6 +51,24 @@ class HeadlessLoggingPyGhidraLauncher(PyGhidraLauncher):
                 config.setApplicationLogFile(log)
 
             Application.initializeApplication(self._layout, config)
+
+
+@dataclass(frozen=True)
+class DecompileResult:
+    completed: bool
+    timed_out: bool
+    cancelled: bool
+    error: Union[str, None]
+    warnings: Tuple[str, ...]
+    code: str
+
+
+class EnhancedSymbol(dict):
+    def __init__(self, *args, decomp_enriched=False, calling_counts_enriched=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.decomp_enriched = decomp_enriched
+        self.calling_counts_enriched = calling_counts_enriched
+        self.lock = RLock()
 
 
 class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
@@ -162,6 +181,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
         # Global instance var to store symbol lookup results
         self.esym_memo = {}
+        self.esym_memo_lock = Lock()
 
         # set instance preferences
         self.force_analysis = force_analysis
@@ -388,82 +408,50 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         """
 
         from ghidra.program.model.symbol import SymbolType
+        from ghidra.util.task import ConsoleTaskMonitor
 
-        # key = f'{sym.iD}-{sym.program.name}-{get_decomp_info}-{use_calling_counts}'
         key = f'{sym.iD}-{self._program_key(sym.program)}'
+        prog = sym.program
+        func: 'ghidra.program.model.listing.Function' = prog.functionManager.getFunctionAt(sym.address)
 
-        if key not in self.esym_memo:
+        with self.esym_memo_lock:
+            record = self.esym_memo.get(key)
+            if record is None:
+                if not sym.symbolType == SymbolType.FUNCTION:
+                    # process symbol
+                    calling = set()
+                    ref_types = set()
 
-            from ghidra.util.task import ConsoleTaskMonitor
+                    for ref in sym.references:
+                        ref_types.add(ref.getReferenceType().toString())
+                        f = prog.getFunctionManager().getFunctionContaining(ref.getFromAddress())
+                        if f:
+                            calling.add(f.getName())
 
-            monitor = ConsoleTaskMonitor()
-            prog = sym.program
-            func: 'ghidra.program.model.listing.Function' = prog.functionManager.getFunctionAt(sym.address)
+                    if sym.parentSymbol is not None:
+                        parent = str(sym.parentSymbol)
+                    else:
+                        parent = None
 
-            if not sym.symbolType == SymbolType.FUNCTION:
-
-                # process symbol
-
-                calling = set()
-                ref_types = set()
-
-                for ref in sym.references:
-                    ref_types.add(ref.getReferenceType().toString())
-                    f = prog.getFunctionManager().getFunctionContaining(ref.getFromAddress())
-                    if f:
-                        calling.add(f.getName())
-
-                calling = list(calling)
-                ref_types = list(ref_types)
-
-                if sym.parentSymbol is not None:
-                    parent = str(sym.parentSymbol)
+                    record = EnhancedSymbol({'name': sym.getName(), 'fullname': sym.getName(True), 'parent': parent, 'refcount': sym.getReferenceCount(), 'reftypes': list(ref_types), 'calling': list(calling),
+                                             'address': str(sym.getAddress()), 'sym_type': str(sym.getSymbolType()), 'sym_source': str(sym.source), 'external': sym.external})
                 else:
-                    parent = None
+                    # proces function
+                    parent_namespace = sym.getParentNamespace().toString().split('@')[0]
+                    record = EnhancedSymbol({'name': sym.getName(), 'fullname': sym.getName(True), 'parent': parent_namespace, 'refcount': sym.getReferenceCount(), 'length': func.body.numAddresses, 'called': [],
+                                             'calling': [], 'paramcount': func.parameterCount, 'address': str(sym.getAddress()), 'sig': str(func.getSignature(False)), 'code': '',
+                                             'decomp_completed': None, 'decomp_timed_out': False, 'decomp_cancelled': False, 'decomp_error': None, 'decomp_warnings': [],
+                                             'instructions': [], 'mnemonics': [], 'blocks': [], 'sym_type': str(sym.getSymbolType()), 'sym_source': str(sym.source), 'external': sym.external})
+                self.esym_memo[key] = record
 
-                self.esym_memo[key] = {'name': sym.getName(), 'fullname': sym.getName(True), 'parent':  parent, 'refcount': sym.getReferenceCount(), 'reftypes': ref_types,  'calling': calling,
-                                       'address': str(sym.getAddress()), 'sym_type': str(sym.getSymbolType()), 'sym_source': str(sym.source), 'external': sym.external}
-            else:
-                # proces function
+        if not sym.symbolType == SymbolType.FUNCTION:
+            return record
 
-                instructions = []
-                mnemonics = []
-                blocks = []
+        monitor = ConsoleTaskMonitor()
+        with record.lock:
+            if not getattr(record, 'calls_enriched', False) or (use_calling_counts and not record.calling_counts_enriched):
                 called_funcs = []
                 calling_funcs = []
-                code = ''
-
-                if get_decomp_info:
-
-                    code_units = func.getProgram().getListing().getCodeUnits(func.getBody(), True)
-
-                    # instruction and mnemonic bulker
-                    for code in code_units:
-                        instructions.append(str(code))
-                        mnemonics.append(str(code.getMnemonicString))
-
-                    from ghidra.program.model.block import BasicBlockModel
-
-                    # Basic Block Bulker
-                    basic_model = BasicBlockModel(func.getProgram(), True)
-                    basic_blocks = basic_model.getCodeBlocksContaining(func.getBody(), monitor)
-
-                    for block in basic_blocks:
-                        code_units = func.getProgram().getListing().getCodeUnits(block, True)
-                        units = []
-                        for code in code_units:
-                            units.append(str(code.mnemonicString))
-
-                        # sort - This case handles the case for compiler optimizations
-                        blocks.extend(sorted(units))
-
-                    if not func.external:
-                        error, code = self.decompile_func(func.program, func, timeout,)
-
-                        if error:
-                            err = f'Failed to decompile {func.program} {func} : {error}'
-                            self.logger.warn(err)
-                            code = err
 
                 if use_calling_counts:
                     MAX_FUNC_REFS = 200
@@ -499,15 +487,53 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
                     for f in func.getCallingFunctions(monitor):
                         calling_funcs.append(f'{f}')
 
-                called_funcs = sorted(called_funcs)
-                calling_funcs = sorted(calling_funcs)
-                parent_namespace = sym.getParentNamespace().toString().split('@')[0]
+                record['called'] = sorted(called_funcs)
+                record['calling'] = sorted(calling_funcs)
+                record.calls_enriched = True
+                record.calling_counts_enriched = use_calling_counts
 
-                self.esym_memo[key] = {'name': sym.getName(), 'fullname': sym.getName(True),  'parent':  parent_namespace, 'refcount': sym.getReferenceCount(), 'length': func.body.numAddresses, 'called': called_funcs,
-                                       'calling': calling_funcs, 'paramcount': func.parameterCount, 'address': str(sym.getAddress()), 'sig': str(func.getSignature(False)), 'code': code,
-                                       'instructions': instructions, 'mnemonics': mnemonics, 'blocks': blocks, 'sym_type': str(sym.getSymbolType()), 'sym_source': str(sym.source), 'external': sym.external}
+            if get_decomp_info and not record.decomp_enriched:
+                instructions = []
+                mnemonics = []
+                blocks = []
+                code_units = func.getProgram().getListing().getCodeUnits(func.getBody(), True)
 
-        return self.esym_memo[key]
+                # instruction and mnemonic bulker
+                for code_unit in code_units:
+                    instructions.append(str(code_unit))
+                    mnemonics.append(str(code_unit.getMnemonicString()))
+
+                from ghidra.program.model.block import BasicBlockModel
+
+                # Basic Block Bulker
+                basic_model = BasicBlockModel(func.getProgram(), True)
+                basic_blocks = basic_model.getCodeBlocksContaining(func.getBody(), monitor)
+
+                for block in basic_blocks:
+                    code_units = func.getProgram().getListing().getCodeUnits(block, True)
+                    units = []
+                    for code_unit in code_units:
+                        units.append(str(code_unit.mnemonicString))
+
+                    # sort - This case handles the case for compiler optimizations
+                    blocks.extend(sorted(units))
+
+                code = ''
+                decomp_fields = {}
+                if not func.external:
+                    result = self.decompile_func(func.program, func, timeout)
+                    code = result.code
+                    decomp_fields = {'decomp_completed': result.completed, 'decomp_timed_out': result.timed_out,
+                                     'decomp_cancelled': result.cancelled, 'decomp_error': result.error, 'decomp_warnings': list(result.warnings)}
+                    if result.error:
+                        self.logger.warning(f'Failed to decompile {func.program} {func}: {result.error}')
+                    for warning in result.warnings:
+                        self.logger.warning(f'Decompiler warning for {func.program} {func}: {warning}')
+
+                record.update({'code': code, 'instructions': instructions, 'mnemonics': mnemonics, 'blocks': blocks, **decomp_fields})
+                record.decomp_enriched = True
+
+        return record
 
     def setup_project(
             self,
@@ -742,17 +768,31 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
         self.decompilers = {}
 
+    @staticmethod
+    def _read_decompile_results(results: 'ghidra.app.decompiler.DecompileResults') -> DecompileResult:
+        message = results.getErrorMessage() or ''
+        completed = results.decompileCompleted()
+        timed_out = results.isTimedOut()
+        cancelled = results.isCancelled()
+        if completed:
+            code = results.getDecompiledFunction().getC()
+            error = None
+            warnings = tuple(filter(None, message.splitlines()))
+        else:
+            code = ''
+            error = message or 'Decompiler did not complete'
+            warnings = ()
+        return DecompileResult(completed, timed_out, cancelled, error, warnings, code)
+
     def decompile_func(
         self,
         prog: "ghidra.program.model.listing.Program",
         func: 'ghidra.program.model.listing.Function',
         timeout: int = 15
-    ) -> List[str]:
+    ) -> DecompileResult:
 
         from ghidra.util.task import ConsoleTaskMonitor
 
-        code = ''
-        error = ''
         monitor = ConsoleTaskMonitor()
         pool = self.decompilers[self._program_key(prog)]
         decomp_id = pool['available'].get()
@@ -760,15 +800,9 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             results: 'ghidra.app.decompiler.DecompileResults' = pool[decomp_id].decompileFunction(
                 func, timeout, monitor)
 
-            error = results.getErrorMessage()
-            if error == '':
-                code = results.getDecompiledFunction().getC()
-            else:
-                error = f'Error: Decompile error: {error}'
+            return self._read_decompile_results(results)
         finally:
             pool['available'].put(decomp_id)
-
-        return error, code
 
     def get_pdb(self, prog: "ghidra.program.model.listing.Program", allow_remote=True) -> "java.io.File":
         """
@@ -1373,11 +1407,11 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         sym: 'ghidra.program.model.symbol.Symbol',
         sym2: 'ghidra.program.model.symbol.Symbol',
         match_types: list,
-        skip_types: list = []
+        skip_types: list = None
     ) -> bool:
         """
-        Determine quickly if a function match requires a deeper diff
-        If the the match type == any of the skip types. Return false.
+        Determine whether a function match requires a deeper diff.
+        Only byte-identical functions with unchanged metadata can skip it.
         """
 
         func: 'ghidra.program.model.listing.Function' = sym.program.functionManager.getFunctionAt(sym.address)
@@ -1387,28 +1421,25 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             self.logger.warning(f'Skipping invalid function match: {sym} {sym2} {match_types}')
             return False
 
-        need_diff = False
+        if 'ExactBytesFunctionHasher' not in match_types:
+            return True
 
-        if not any(skip_type in match_types for skip_type in skip_types):
-            if func.body.numAddresses != func2.body.numAddresses:
-                need_diff = True
-            elif sym.referenceCount != sym2.referenceCount:
-                need_diff = True
-            elif (
-                {
-                    'StructuralGraphHash',
-                    'StructuralGraphExactHash',
-                    'BulkInstructionHash',
-                    'BulkBasicBlockMnemonicHash',
-                    'BSIM',
-                    'Decomp Match',
-                }.intersection(match_types)
-                and self.min_func_len < 10
-                and min(func.body.numAddresses, func2.body.numAddresses) <= self.min_func_len
-            ):
-                need_diff = True
+        return any((
+            func.body.numAddresses != func2.body.numAddresses,
+            sym.referenceCount != sym2.referenceCount,
+            sym.getName(True) != sym2.getName(True),
+            str(func.getSignature(False)) != str(func2.getSignature(False)),
+        ))
 
-        return need_diff
+    def syms_need_decomp(
+        self,
+        sym: 'ghidra.program.model.symbol.Symbol',
+        sym2: 'ghidra.program.model.symbol.Symbol',
+        match_types: list,
+    ) -> bool:
+        func: 'ghidra.program.model.listing.Function' = sym.program.functionManager.getFunctionAt(sym.address)
+        func2: 'ghidra.program.model.listing.Function' = sym2.program.functionManager.getFunctionAt(sym2.address)
+        return func is not None and func2 is not None and 'ExactBytesFunctionHasher' not in match_types
 
     def gen_proj_bin_name_from_path(self, path: Path):
         """
@@ -1630,7 +1661,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
         for sym, sym2, match_types in matched:
 
-            if not self.syms_need_diff(sym, sym2, match_types, skip_types):
+            if not self.syms_need_decomp(sym, sym2, match_types):
                 continue
 
             funcs_need_decomp.append(sym)
@@ -1737,7 +1768,8 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
                 # TODO remove this hack to find false positives
                 # potential decompile jumptable issue ghidra/issues/2452
-                if "Could not recover jumptable" not in diff:
+                decomp_warnings = ematch_1['decomp_warnings'] + ematch_2['decomp_warnings']
+                if not any('Could not recover jumptable' in warning for warning in decomp_warnings):
                     diff_type.append('code')
                 else:
                     self.logger.warn(
@@ -1758,7 +1790,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             if ematch_1['sig'] != ematch_2['sig']:
                 diff_type.append('sig')
 
-            if ematch_1['address'] != ematch_2['address']:
+            if ematch_1['address'] != ematch_2['address'] and 'ExactBytesFunctionHasher' not in match_types:
                 diff_type.append('address')
 
             if not (len(ematch_1['calling']) == len(ematch_2['calling']) and len(set(ematch_2['calling']).union(set(ematch_1['calling']))) == len(ematch_1['calling'])):
