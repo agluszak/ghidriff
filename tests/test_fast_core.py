@@ -1,4 +1,5 @@
 import argparse
+from collections import Counter
 import logging
 from pathlib import Path
 import sys
@@ -8,6 +9,8 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from ghidriff import DecompileResult, FunctionMatch, GhidraDiffEngine, get_parser
+from ghidriff.decomp_correlate import decomp_correlate
+from ghidriff.implied_matches import find_implied_matches
 from ghidriff.utils import get_pe_extra_data
 
 
@@ -451,6 +454,199 @@ def test_diff_pairs_routes_matches_through_standard_pipeline():
         'force_diff': True,
         'function_matches': matches,
     })]
+
+
+class _FakeCorrelationAddressSet:
+    def __init__(self):
+        self.addresses = set()
+
+    def contains(self, address):
+        return address in self.addresses
+
+    def add(self, address):
+        self.addresses.add(address)
+
+
+class _FakeCorrelationFunction:
+    def __init__(self, address):
+        self.address = address
+
+    def getEntryPoint(self):
+        return self.address
+
+    def getSymbol(self):
+        return self.address
+
+
+class _FakeDecompCorrelationEngine:
+    def __init__(self, code):
+        self.code = code
+        self.calls = Counter()
+        self.logger = logging.getLogger('test')
+
+    def enhance_sym(self, symbol, get_decomp_info=False):
+        self.calls[symbol] += 1
+        return {'code': self.code[symbol], 'decomp_completed': True}
+
+    def remove_code_sig(self, code):
+        return code.split('{', 1)[-1].splitlines(True)
+
+
+def test_decomp_correlate_groups_unique_normalized_decompilations():
+    p1_funcs = [_FakeCorrelationFunction(address) for address in ('old-unique', 'old-dup-1', 'old-dup-2')]
+    p2_funcs = [_FakeCorrelationFunction(address) for address in ('new-unique', 'new-dup-1', 'new-dup-2')]
+    engine = _FakeDecompCorrelationEngine({
+        'old-unique': 'old_signature {\n  return 1;\n}',
+        'new-unique': 'new_signature {\n  return 1;\n}',
+        'old-dup-1': 'a {\n  return 2;\n}',
+        'old-dup-2': 'b {\n  return 2;\n}',
+        'new-dup-1': 'c {\n  return 2;\n}',
+        'new-dup-2': 'd {\n  return 2;\n}',
+    })
+    matches = {}
+    p1_matches = _FakeCorrelationAddressSet()
+    p2_matches = _FakeCorrelationAddressSet()
+
+    decomp_correlate(engine, matches, p1_funcs, p2_funcs, p1_matches, p2_matches)
+
+    assert matches == {('old-unique', 'new-unique'): {'Decomp Match': 1}}
+    assert engine.calls == Counter({func.getEntryPoint(): 1 for func in p1_funcs + p2_funcs})
+
+
+class _FakeRefType:
+    def isCall(self):
+        return True
+
+    def isData(self):
+        return False
+
+
+class _FakeMemoryAddress:
+    def __init__(self, value):
+        self.value = value
+
+    def isMemoryAddress(self):
+        return True
+
+    def __hash__(self):
+        return hash(self.value)
+
+    def __eq__(self, other):
+        return isinstance(other, _FakeMemoryAddress) and self.value == other.value
+
+
+class _FakeReference:
+    def __init__(self, ref_type, from_address, to_address):
+        self.ref_type = ref_type
+        self.from_address = from_address
+        self.to_address = to_address
+
+    def getReferenceType(self):
+        return self.ref_type
+
+    def getFromAddress(self):
+        return self.from_address
+
+    def getToAddress(self):
+        return self.to_address
+
+
+class _FakeTargetFunction:
+    def isThunk(self):
+        return False
+
+
+class _FakeImpliedFunctionManager:
+    def getFunctionAt(self, address):
+        return _FakeTargetFunction()
+
+
+class _FakeReferenceManager:
+    def __init__(self, refs=None, destination_refs=None):
+        self.refs = refs or []
+        self.destination_refs = destination_refs or {}
+
+    def getReferenceSourceIterator(self, body, forward):
+        return range(len(self.refs))
+
+    def getReferencesFrom(self, address):
+        if isinstance(address, int):
+            return [self.refs[address]]
+        return self.destination_refs.get(address, [])
+
+
+class _FakeImpliedProgram:
+    def __init__(self, ref_manager):
+        self.ref_manager = ref_manager
+        self.function_manager = _FakeImpliedFunctionManager()
+
+    def getReferenceManager(self):
+        return self.ref_manager
+
+    def getFunctionManager(self):
+        return self.function_manager
+
+
+class _FakeImpliedFunction:
+    def __init__(self, program):
+        self.program = program
+
+    def getProgram(self):
+        return self.program
+
+    def getBody(self):
+        return object()
+
+
+class _FakeAddressRange:
+    def __init__(self, address):
+        self.address = address
+
+    def getMinAddress(self):
+        return self.address
+
+
+class _FakeAddressCorrelation:
+    def __init__(self):
+        self.calls = []
+
+    def getCorrelatedDestinationRange(self, address, monitor):
+        self.calls.append(address)
+        return _FakeAddressRange(f'dest-{address}')
+
+
+def test_find_implied_matches_reuses_address_correlation():
+    ref_type = _FakeRefType()
+    src_refs = [
+        _FakeReference(ref_type, 'src-1', _FakeMemoryAddress('old-target-1')),
+        _FakeReference(ref_type, 'src-2', _FakeMemoryAddress('old-target-2')),
+    ]
+    dst_refs = {
+        'dest-src-1': [_FakeReference(ref_type, 'dest-src-1', _FakeMemoryAddress('new-target-1'))],
+        'dest-src-2': [_FakeReference(ref_type, 'dest-src-2', _FakeMemoryAddress('new-target-2'))],
+    }
+    src_func = _FakeImpliedFunction(_FakeImpliedProgram(_FakeReferenceManager(src_refs)))
+    dst_func = _FakeImpliedFunction(_FakeImpliedProgram(_FakeReferenceManager(destination_refs=dst_refs)))
+    correlations = []
+
+    def correlation_factory(source, destination):
+        correlation = _FakeAddressCorrelation()
+        correlations.append(correlation)
+        return correlation
+
+    implied = find_implied_matches(
+        src_func,
+        dst_func,
+        correlation_factory=correlation_factory,
+        monitor=object(),
+    )
+
+    assert len(correlations) == 1
+    assert correlations[0].calls == ['src-1', 'src-2']
+    assert set(implied) == {
+        (_FakeMemoryAddress('old-target-1'), _FakeMemoryAddress('new-target-1'), 'FUNCTION'),
+        (_FakeMemoryAddress('old-target-2'), _FakeMemoryAddress('new-target-2'), 'FUNCTION'),
+    }
 
 
 class _FakeSymbolTable:

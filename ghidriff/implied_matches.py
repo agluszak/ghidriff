@@ -30,7 +30,16 @@ def find_matching_ref(ref_type, refs_from):
     return None
 
 
-def find_implied_match(src_func: "ghidra.program.model.listing.Function", dst_func: "ghidra.program.model.listing.Function", ref: "ghidra.program.model.symbol.Reference"):
+def find_implied_match(src_func: "ghidra.program.model.listing.Function", dst_func: "ghidra.program.model.listing.Function", ref: "ghidra.program.model.symbol.Reference", correlation=None, monitor=None):
+
+    if correlation is None:
+        from ghidra.feature.vt.api.correlator.address import VTHashedFunctionAddressCorrelation
+
+        correlation = VTHashedFunctionAddressCorrelation(src_func, dst_func)
+    if monitor is None:
+        from ghidra.util.task import ConsoleTaskMonitor
+
+        monitor = ConsoleTaskMonitor()
 
     # // Get the reference type of the passed in reference and make sure it is either a call or
     # // data reference
@@ -54,15 +63,7 @@ def find_implied_match(src_func: "ghidra.program.model.listing.Function", dst_fu
 
     src_ref_from_addr = ref.getFromAddress()
 
-    from ghidra.feature.vt.api.correlator.address import VTHashedFunctionAddressCorrelation
-    from ghidra.util.task import ConsoleTaskMonitor
-    from ghidra.program.model.symbol import RefType
-
-    monitor = ConsoleTaskMonitor()
-
-    cor = VTHashedFunctionAddressCorrelation(src_func, dst_func)
-
-    addr_range = cor.getCorrelatedDestinationRange(src_ref_from_addr, monitor)
+    addr_range = correlation.getCorrelatedDestinationRange(src_ref_from_addr, monitor)
     if addr_range is None:
         return None
 
@@ -79,6 +80,8 @@ def find_implied_match(src_func: "ghidra.program.model.listing.Function", dst_fu
 
     actual_type = None
     if ref_type.isData():
+        from ghidra.program.model.symbol import RefType
+
         actual_type = 'DATA'
         if src_func.getProgram().getListing().getInstructionAt(src_ref_to_addr) is not None:
             if ref_type != RefType.DATA:
@@ -94,11 +97,21 @@ def find_implied_match(src_func: "ghidra.program.model.listing.Function", dst_fu
     return (src_ref_to_addr, dest_ref_to_addr, actual_type)
 
 
-def find_implied_matches(src_func: "ghidra.program.model.listing.Function", dst_func: "ghidra.program.model.listing.Function"):
+def find_implied_matches(src_func: "ghidra.program.model.listing.Function", dst_func: "ghidra.program.model.listing.Function", correlation_factory=None, monitor=None):
     """
     Find implied matches for already accepted functions
     # Ghidra/Features/VersionTracking/src/main/java/ghidra/feature/vt/gui/util/ImpliedMatchUtils.java
     """
+    if correlation_factory is None:
+        from ghidra.feature.vt.api.correlator.address import VTHashedFunctionAddressCorrelation
+
+        correlation_factory = VTHashedFunctionAddressCorrelation
+    if monitor is None:
+        from ghidra.util.task import ConsoleTaskMonitor
+
+        monitor = ConsoleTaskMonitor()
+
+    correlation = correlation_factory(src_func, dst_func)
     implied_matches = []
 
     ref_man = src_func.getProgram().getReferenceManager()
@@ -106,7 +119,7 @@ def find_implied_matches(src_func: "ghidra.program.model.listing.Function", dst_
     for addr in ref_man.getReferenceSourceIterator(body, True):
         refs_from = ref_man.getReferencesFrom(addr)
         for ref in refs_from:
-            implied_match = find_implied_match(src_func, dst_func, ref)
+            implied_match = find_implied_match(src_func, dst_func, ref, correlation, monitor)
             if implied_match is not None:
                 # print(implied_match)
                 implied_matches.append(implied_match)
@@ -120,25 +133,25 @@ def correlate_implied_matches(matches, p1_missing, p2_missing, p1_matches, p2_ma
     if the calling function has been accepted, then accept the unmatched called function
     """
 
-    logger.info(f'Running correlator: Implied matches on p1:{len(p1_missing)} p2:{len(p1_missing)}')
+    logger.info(f'Running correlator: Implied matches on p1:{len(p1_missing)} p2:{len(p2_missing)}')
 
 
     # build list of function entry points that have already been matched
     matched_src_addrs = {}
     matched_dst_addrs = {}
-    for i, match in enumerate(matches):
-        matched_src_addrs[match[0]] = i
-        matched_dst_addrs[match[1]] = i
+    for match in matches:
+        matched_src_addrs[match[0]] = match
+        matched_dst_addrs[match[1]] = match
 
     potential_calling_funcs = []
-    src_missing_addrs = []
-    dst_missing_addrs = []
+    src_missing_addrs = set()
+    dst_missing_addrs = set()
 
     for src_func in p1_missing:
         src_func: "ghidra.program.model.listing.Function" = src_func
-        src_missing_addrs.append(src_func.getEntryPoint())
+        src_missing_addrs.add(src_func.getEntryPoint())
         potential_p1_calling_funcs = [func for func in list(src_func.getCallingFunctions(
-            monitor)) if func.getEntryPoint() in matched_src_addrs.keys()]
+            monitor)) if func.getEntryPoint() in matched_src_addrs]
         if logger is not None:
             logger.debug(
                 f'Found {len(potential_p1_calling_funcs)} p1 calling functions for potential implied match for {src_func}')
@@ -146,9 +159,9 @@ def correlate_implied_matches(matches, p1_missing, p2_missing, p1_matches, p2_ma
 
     for dst_func in p2_missing:
         dst_func: "ghidra.program.model.listing.Function" = dst_func
-        dst_missing_addrs.append(dst_func.getEntryPoint())
+        dst_missing_addrs.add(dst_func.getEntryPoint())
         potential_p2_calling_funcs = [func for func in list(
-            dst_func.getCallingFunctions(monitor)) if func.getEntryPoint() in matched_dst_addrs.keys()]
+            dst_func.getCallingFunctions(monitor)) if func.getEntryPoint() in matched_dst_addrs]
         if logger is not None:
             logger.debug(
                 f'Found {len(potential_p2_calling_funcs)} p2 calling functions for potential implied match for {dst_func}')
@@ -157,19 +170,18 @@ def correlate_implied_matches(matches, p1_missing, p2_missing, p1_matches, p2_ma
     potential_calling_funcs = list(set(potential_calling_funcs))
 
     # find all matches that might provide an implied match for unmatched functions
-    potential_accepted_matches = []
+    potential_accepted_match_addrs = set()
     for func in potential_calling_funcs:
-        match_index = None
-        if matched_src_addrs.get(func.getEntryPoint()) is not None:
-            match_index = matched_src_addrs.get(func.getEntryPoint())
-        elif matched_dst_addrs.get(func.getEntryPoint()) is not None:
-            match_index = matched_dst_addrs.get(func.getEntryPoint())
+        match = matched_src_addrs.get(func.getEntryPoint())
+        if match is None:
+            match = matched_dst_addrs.get(func.getEntryPoint())
+        if match is not None:
+            potential_accepted_match_addrs.add(match)
 
-        if match_index is not None:
-            match = list(matches.keys())[match_index]
-            f1 = p1.functionManager.getFunctionAt(match[0])
-            f2 = p2.functionManager.getFunctionAt(match[1])
-            potential_accepted_matches.append((f1, f2))
+    potential_accepted_matches = [
+        (p1.functionManager.getFunctionAt(match[0]), p2.functionManager.getFunctionAt(match[1]))
+        for match in potential_accepted_match_addrs
+    ]
 
     recovered = 0
     completed = 0
