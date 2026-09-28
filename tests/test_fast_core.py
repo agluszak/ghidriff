@@ -1,5 +1,6 @@
 import argparse
 from collections import Counter
+import inspect
 import logging
 from pathlib import Path
 import sys
@@ -125,7 +126,7 @@ def test_ghidra_application_info_falls_back_to_launcher_app_info():
     launcher = SimpleNamespace(
         _layout=None,
         app_info=SimpleNamespace(
-            version="12.0.4",
+            version="12.1.4",
             build_date="2026-Mar-03 1410 EST",
             release_name="PUBLIC",
         ),
@@ -133,7 +134,7 @@ def test_ghidra_application_info_falls_back_to_launcher_app_info():
 
     app_info = GhidraDiffEngine.get_ghidra_application_info(launcher)
 
-    assert app_info.applicationVersion == "12.0.4"
+    assert app_info.applicationVersion == "12.1.4"
     assert app_info.applicationBuildDate == "2026-Mar-03 1410 EST"
     assert app_info.applicationReleaseName == "PUBLIC"
 
@@ -170,6 +171,10 @@ class _FakeSymbol:
 class _FastEngine(GhidraDiffEngine):
     def find_matches(self, p1, p2):
         return [[], [], []]
+
+
+def test_base_engine_can_be_used_with_supplied_pairs():
+    assert not inspect.isabstract(GhidraDiffEngine)
 
 
 def test_broad_hash_matches_still_get_diffed_for_small_function_changes():

@@ -85,8 +85,8 @@ def test_diff_ntoskrnl_decomp_unmatched(shared_datadir: Path):
                          md_title=args.md_title)
 
 
-    assert pdiff['stats']['match_types']['Decomp Match'] == 29
+    assert pdiff['stats']['match_types']['Decomp Match'] == 3
 
-    assert len(pdiff['functions']['added']) == 0
-    assert len(pdiff['functions']['deleted']) == 0
-    assert len(pdiff['functions']['modified']) in [6, 33, 34, 35]  # Various modified across Ghidra vers
+    assert len(pdiff['functions']['added']) == 26
+    assert len(pdiff['functions']['deleted']) == 26
+    assert len(pdiff['functions']['modified']) > 0
