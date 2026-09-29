@@ -245,7 +245,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         if str(ghidra_version) != target_ghidra:
             self.logger.warning(
                 f"Expected Ghidra {target_ghidra}; running {ghidra_version}. "
-                "Rebuild the devcontainer or use --force-diff only after validating runtime behavior."
+                "Use --force-diff only after validating runtime behavior."
             )
 
         try:

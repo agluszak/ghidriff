@@ -4,7 +4,7 @@
 
 
 <p align="center">    
-<img align="center" alt="GitHub Workflow Status (with event)" src="https://img.shields.io/github/actions/workflow/status/clearbluejar/ghidriff/pytest-devcontainer.yml?label=pytest&style=for-the-badge">
+<img align="center" alt="GitHub Workflow Status (with event)" src="https://img.shields.io/github/actions/workflow/status/clearbluejar/ghidriff/lint-python-package.yml?label=checks&style=for-the-badge">
 <img align="center" alt="PyPI - Downloads" src="https://img.shields.io/pypi/dm/ghidriff?color=yellow&label=PyPI%20downloads&style=for-the-badge">
 <img align="center" src="https://img.shields.io/github/stars/clearbluejar/ghidriff?style=for-the-badge">
 
@@ -59,7 +59,6 @@ end
   - Calling
   - Binary Metadata
 - Batteries Included
-  - Docker support
   - Automated Testing
   - Ghidra (No license required)
 
@@ -94,7 +93,7 @@ The heavy lifting of the binary analysis is done by Ghidra and the diffing is po
 
 `ghidriff` provides a core base class [GhidraDiffEngine](ghidriff/ghidra_diff_engine.py) that can be extended to create your own binary diffing [implementations](#implementations).
 
-The base class implements the first 3 steps of the Ghidra [headless workflow](https://github.com/clearbluejar/ghidra-python-vscode-devcontainer-skeleton#steps):
+The base class implements the first 3 steps of the Ghidra headless workflow:
 >1. **Create Ghidra Project** - Directory and collection of Ghidra project files and data
 >2. **Import Binary to project** - Import one or more binaries to the project for analysis
 >3. **Analyze Binary** - Ghidra will perform default binary analysis on each binary
@@ -313,84 +312,13 @@ export GHIDRA_INSTALL_DIR="/path/to/ghidra/"
 uvx ghidriff
 ```
 
-## Ghidriff in a Box 
+## Development
 
-Don't want to install Ghidra and Java on your host? Try "Ghidriff in a box". It supports multiple-platforms (x64 and arm64).
-
-<p align='center'>
-<img src="https://github.com/clearbluejar/ghidriff/assets/3752074/688756fc-038c-471a-8e49-e56a1c06e77c" height="300">
-</p>
-
-### Docker
-
-`docker pull ghcr.io/clearbluejar/ghidriff:latest`
-
-
-This is a docker container with the latest [PyPi version of Ghidriff](https://pypi.org/project/ghidriff/) installed. You can check the latest container [here](https://github.com/clearbluejar/ghidriff/pkgs/container/ghidriff).
-
-
-#### For Docker command-line diffing
-
-You will need to map the binaries you want to compare into the container. See below for an example.
-```bash
-mkdir -p ghidriffs
-wget https://msdl.microsoft.com/download/symbols/clfs.sys/9848245C6f000/clfs.sys -O ghidriffs/clfs.sys.x64.10.0.22621.2506
-wget https://msdl.microsoft.com/download/symbols/clfs.sys/D929C6E56f000/clfs.sys -O ghidriffs/clfs.sys.x64.10.0.22621.2715
-docker run -it --rm -v $(pwd)/ghidriffs:/ghidriffs ghcr.io/clearbluejar/ghidriff:latest  ghidriffs/clfs.sys.x64.10.0.22621.2506 ghidriffs/clfs.sys.x64.10.0.22621.2715
-```
-
-The result will produce the following. 
-
-```bash
-tree ghidriffs
-ghidriffs
-├── clfs.sys.x64.10.0.22621.2506
-├── clfs.sys.x64.10.0.22621.2506-clfs.sys.x64.10.0.22621.2715.ghidriff.md
-├── clfs.sys.x64.10.0.22621.2715
-├── ghidra_projects
-│   └── ghidriff-clfs.sys.x64.10.0.22621.2506-clfs.sys.x64.10.0.22621.2715
-│       ├── ghidriff-clfs.sys.x64.10.0.22621.2506-clfs.sys.x64.10.0.22621.2715.gpr
-│       ├── ghidriff-clfs.sys.x64.10.0.22621.2506-clfs.sys.x64.10.0.22621.2715.lock
-│       └── ghidriff-clfs.sys.x64.10.0.22621.2506-clfs.sys.x64.10.0.22621.2715.rep
-├── ghidriff.log
-├── json
-│   └── clfs.sys.x64.10.0.22621.2506-clfs.sys.x64.10.0.22621.2715.ghidriff.json
-└── symbols
-    ├── 000admin
-    ├── clfs.pdb
-    │   ├── 6EAE8987F981603FEFA0E55DE0CE2C521
-    │   │   └── clfs.pdb
-    │   └── E3D1FEA241ECEC3DC6DB2B278A22A6A31
-    │       └── clfs.pdb
-    └── pingme.txt
-
-```
-
-### Devcontainer - For Ghidriff development
-
-Use the [.devcontainer](.devcontainer) in this repo. If you don't know how, follow the detailed instructions here: [ghidra-python-vscode-devcontainer-skeleton quick setup](https://github.com/clearbluejar/ghidra-python-vscode-devcontainer-skeleton#quick-start-setup---dev-container--best-option).
-
-The devcontainer targets `ghcr.io/clearbluejar/ghidra-python:12.1.4ghidra3.13python-bookworm`. After rebuilding it, the post-create step installs ghidriff with test and dev extras.
-
-Useful development commands:
-
-```bash
-make install-dev
-make test
-make test-fast
-make test-integration
-make lint
-make check
-```
-
-`make test` runs the full suite. `make test-fast` runs tests that do not launch Ghidra. `make test-integration` runs the Ghidra-backed tests and requires `tests/data`, `GHIDRA_INSTALL_DIR`, and a compatible pyghidra/Ghidra runtime. JVM arguments that begin with `-` should be passed with equals syntax, for example:
-
-```bash
-ghidriff --jvm-args=-Xmx8G --decompiler-timeout 120 old.bin new.bin
-```
-
-Deferred design items are tracked in [docs/deferred-issues.md](docs/deferred-issues.md).
-
+Install the pinned dependencies with `uv sync --locked --extra testing --extra dev`.
+Use `make test-fast` for tests that do not launch Ghidra, `make test-integration`
+for Ghidra-backed tests, and `make check` for lint plus fast tests.
+The integration suite requires `tests/data`, `GHIDRA_INSTALL_DIR`, and a matching
+pyghidra/Ghidra runtime.
 
 ## Use Cases
 

@@ -1,33 +1,30 @@
-PYTHON ?= $(shell test -x .env/bin/python && echo .env/bin/python || echo python)
-PIP ?= $(PYTHON) -m pip
-PYTEST ?= $(PYTHON) -m pytest
-RUFF ?= $(PYTHON) -m ruff
+UV ?= uv
 
 .PHONY: install install-dev dev-setup test test-fast test-integration lint format clean check
 
 install:
-	$(PIP) install -e .
+	$(UV) sync --locked
 
 install-dev:
-	$(PIP) install -e ".[testing,dev]"
+	$(UV) sync --locked --extra testing --extra dev
 
 dev-setup: install-dev
-	$(PYTHON) tests/init_pyghidra.py
+	$(UV) run --locked --extra testing --extra dev python tests/init_pyghidra.py
 
 test:
-	$(PYTEST)
+	$(UV) run --locked --extra testing pytest
 
 test-fast:
-	$(PYTEST) -m fast
+	$(UV) run --locked --extra testing pytest -m fast
 
 test-integration:
-	$(PYTEST) -m integration
+	$(UV) run --locked --extra testing pytest -m integration
 
 lint:
-	$(RUFF) check ghidriff tests
+	$(UV) run --locked --extra dev ruff check ghidriff tests
 
 format:
-	$(RUFF) format ghidriff tests
+	$(UV) run --locked --extra dev ruff format ghidriff tests
 
 check: lint test-fast
 

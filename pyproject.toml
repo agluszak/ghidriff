@@ -1,3 +1,34 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghidriff"
+description = "Ghidra Binary Diffing Engine"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+license = "GPL-3.0-only"
+authors = [{ name = "clearbluejar", email = "clearbluejar@clearbluejar.com" }]
+keywords = ["patchdiff", "binaries", "bindiff", "ghidra", "ghidriff"]
+dependencies = ["pyghidra>=3.1.0,<4", "mdutils==1.6.0"]
+
+[project.urls]
+Homepage = "https://github.com/clearbluejar/ghidriff"
+
+[project.scripts]
+ghidriff = "ghidriff.__main__:main"
+
+[project.optional-dependencies]
+testing = ["pytest", "requests", "pytest-datadir", "pytest-forked", "pytest-xdist"]
+dev = ["ruff", "ghidra-stubs==12.1.4"]
+
+[tool.setuptools.dynamic]
+version = { attr = "ghidriff.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["ghidriff*"]
+
 [tool.ruff]
 line-length = 130
 target-version = "py310"
