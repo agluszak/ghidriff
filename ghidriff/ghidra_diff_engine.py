@@ -166,8 +166,9 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             f'GHIDRA {app_prop.applicationVersion}  Build Date: {app_prop.applicationBuildDate} Release: {app_prop.applicationReleaseName}')
         self.check_runtime_compatibility(app_prop.applicationVersion)
         self.logger.info(f"Engine Args:")
-        for arg in vars(args):
-            self.logger.info('\t%-20s%s', f'{arg}:', vars(args)[arg])
+        if args is not None:
+            for arg, value in vars(args).items():
+                self.logger.info('\t%-20s%s', f'{arg}:', value)
 
         self.threaded = threaded
         self.max_workers = max_workers
