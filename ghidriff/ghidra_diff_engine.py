@@ -1508,6 +1508,14 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         r'|(joined_r0x|code_r0x)([0-9a-fA-F]+))'
         r'(?![0-9A-Za-z_])'
     )
+    # A single-bit test has the same zero/nonzero result whether Ghidra
+    # renders it as a shift-and-one or as a mask. Do not rewrite the value of
+    # the expression itself: outside a zero comparison it is 0/1 vs 0/mask.
+    ZERO_BIT_TEST = re.compile(
+        r'(?P<prefix>\(\s*)(?P<operand>\*\([^()]*\)\([^()]*\)|\*[A-Za-z_]\w*|[A-Za-z_]\w*)'
+        r'\s*>>\s*(?P<shift>0x[0-9a-fA-F]+|\d+)\s*&\s*1'
+        r'(?P<tail>\)\s*(?:==|!=)\s*0)(?![\w])'
+    )
 
     # Ghidra's PE loader comments each export as "<rva>  <ordinal>  <name>",
     # wrapping a long name onto the next line. The ordinal and name are export
@@ -1624,6 +1632,13 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
                 left, right = right, left
             return f'{match.group(1)}{left} {match.group(3)} {right}{match.group(5)}'
 
+        def normalize_zero_bit_test(match: re.Match) -> str:
+            spelling = match.group('shift')
+            shift = int(spelling, 16 if spelling.startswith('0x') else 10)
+            if shift >= 32:
+                return match.group(0)
+            return f"{match.group('prefix')}{match.group('operand')} & {1 << shift:#x}{match.group('tail')}"
+
         for i, line in enumerate(code):
             if stack_setup and entry_address is not None:
                 return_address = GhidraDiffEngine.STACK_RETURN_ADDRESS.fullmatch(line)
@@ -1640,6 +1655,12 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             if GhidraDiffEngine.WARNING_COMMENT.search(line):
                 line = GhidraDiffEngine.WARNING_ADDRESS.sub('ADDR', line)
             line = GhidraDiffEngine.SIMPLE_EQUALITY.sub(order_simple_equality, line)
+            if not line.lstrip().startswith(('/*', '//', '*')):
+                parts = GhidraDiffEngine.QUOTED_LITERAL.split(line)
+                line = ''.join(
+                    part if j % 2 else GhidraDiffEngine.ZERO_BIT_TEST.sub(normalize_zero_bit_test, part)
+                    for j, part in enumerate(parts)
+                )
             code[i] = line
 
         GhidraDiffEngine.normalize_auto_temporaries(code)

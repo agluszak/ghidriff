@@ -827,6 +827,30 @@ def test_normalize_ghidra_decomp_orders_simple_equality():
     ]
 
 
+def test_normalize_zero_comparisons_of_single_bit_tests():
+    code = [
+        '  if ((*_g_camera >> 6 & 1) == 0) {\n',
+        '  if ((*(uint *)(param_1 + 0xa0) >> 0x8 & 1) != 0) {\n',
+        '  if ((uVar0 >> 5 & 1) == 0) {\n',
+        '  return (uVar0 >> 5 & 1);\n',
+        '  if ((left + right >> 5 & 1) == 0) {\n',
+        '  if ((uVar0 >> 32 & 1) == 0) {\n',
+        '  puts("(uVar0 >> 5 & 1) == 0");\n',
+    ]
+
+    GhidraDiffEngine.normalize_ghidra_decomp(None, code)
+
+    assert code == [
+        '  if ((*_g_camera & 0x40) == 0) {\n',
+        '  if ((*(uint *)(param_1 + 0xa0) & 0x100) != 0) {\n',
+        '  if ((uVar0 & 0x20) == 0) {\n',
+        '  return (uVar0 >> 5 & 1);\n',
+        '  if ((left + right >> 5 & 1) == 0) {\n',
+        '  if ((uVar0 >> 32 & 1) == 0) {\n',
+        '  puts("(uVar0 >> 5 & 1) == 0");\n',
+    ]
+
+
 def test_normalize_ghidra_decomp_orders_independent_local_steps():
     code = [
         '      piVar3 = piVar3 + 1;\n',
