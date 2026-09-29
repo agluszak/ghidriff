@@ -1528,6 +1528,67 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         r'^(?P<indent>[ \t]*)(?P<name>[A-Za-z]+Var\d+) = '
         r'(?P=name) [+-] (?:0x[0-9a-fA-F]+|\d+);\n?$'
     )
+    AUTO_TEMP = re.compile(r'\b([A-Za-z]+Var)\d+\b')
+    AUTO_TEMP_DECL = re.compile(r'^\s*[^=();]+?\b([A-Za-z]+Var\d+);\s*$')
+    QUOTED_LITERAL = re.compile(r'''("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')''')
+
+    @staticmethod
+    def normalize_auto_temporaries(code: list) -> None:
+        """Name Ghidra temporaries by first use, without changing their dataflow.
+
+        Only declared auto names participate. Parameters, stack locations and
+        user symbols retain their identities. Sorting declarations is safe:
+        they have no effects, and Ghidra orders them by its arbitrary names.
+        """
+        try:
+            start = next(i for i, line in enumerate(code) if line.strip() == '{') + 1
+            end = next(i for i in range(start, len(code)) if not code[i].strip())
+        except StopIteration:
+            return
+
+        declarations = {}
+        for i in range(start, end):
+            match = GhidraDiffEngine.AUTO_TEMP_DECL.fullmatch(code[i])
+            if match is not None:
+                declarations[match.group(1)] = i
+        if not declarations:
+            return
+
+        names = {}
+        counts = Counter()
+
+        def rename(match: re.Match) -> str:
+            name = match.group(0)
+            if name not in declarations:
+                return name
+            if name not in names:
+                prefix = match.group(1)
+                names[name] = f'{prefix}{counts[prefix]}'
+                counts[prefix] += 1
+            return names[name]
+
+        for i in range(end + 1, len(code)):
+            parts = GhidraDiffEngine.QUOTED_LITERAL.split(code[i])
+            code[i] = ''.join(
+                part if j % 2 else GhidraDiffEngine.AUTO_TEMP.sub(rename, part)
+                for j, part in enumerate(parts)
+            )
+        for name in declarations:
+            if name not in names:
+                prefix = GhidraDiffEngine.AUTO_TEMP.fullmatch(name).group(1)
+                names[name] = f'{prefix}{counts[prefix]}'
+                counts[prefix] += 1
+
+        declared_indices = set(declarations.values())
+        first = min(declared_indices)
+        ordered = sorted(
+            (GhidraDiffEngine.AUTO_TEMP.sub(lambda m: names[m.group(0)], code[i])
+             for i in declared_indices),
+            key=lambda line: line.strip(),
+        )
+        remaining = [code[i] for i in range(start, end) if i not in declared_indices]
+        remaining[first - start:first - start] = ordered
+        code[start:end] = remaining
 
     def normalize_ghidra_decomp(self, code: list, entry_address=None, stack_setup=False):
         """
@@ -1580,6 +1641,10 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
                 line = GhidraDiffEngine.WARNING_ADDRESS.sub('ADDR', line)
             line = GhidraDiffEngine.SIMPLE_EQUALITY.sub(order_simple_equality, line)
             code[i] = line
+
+        GhidraDiffEngine.normalize_auto_temporaries(code)
+        for i, line in enumerate(code):
+            code[i] = GhidraDiffEngine.SIMPLE_EQUALITY.sub(order_simple_equality, line)
 
         # Constant steps of distinct decompiler locals commute, regardless of
         # step size or direction. Keep memory writes and expressions that may

@@ -865,3 +865,60 @@ def test_normalize_ghidra_decomp_orders_different_constant_steps():
         '      puVar1 = puVar1 + 4;\n',
         '      uVar2 = uVar2 - 1;\n',
     ]
+
+
+def test_normalize_ghidra_decomp_auto_temporary_renumbering():
+    old = '''void f(void)
+{
+  int iVar1;
+  int iVar2;
+  undefined4 *puVar3;
+  void *local_c;
+
+  puVar3 = operator_new(0x10);
+  iVar2 = *(int *)(param_1 + 4);
+  iVar1 = iVar2 + 1;
+  if (iVar1 == iVar2) iVar1 = iVar2;
+  log("iVar1");
+  *puVar3 = iVar1;
+  return;
+}
+'''.splitlines(keepends=True)
+    new = '''void f(void)
+{
+  int iVar6;
+  undefined4 *puVar2;
+  int iVar3;
+  void *local_c;
+
+  puVar2 = operator_new(0x10);
+  iVar3 = *(int *)(param_1 + 4);
+  iVar6 = iVar3 + 1;
+  if (iVar6 == iVar3) iVar6 = iVar3;
+  log("iVar1");
+  *puVar2 = iVar6;
+  return;
+}
+'''.splitlines(keepends=True)
+
+    GhidraDiffEngine.normalize_ghidra_decomp(None, old)
+    GhidraDiffEngine.normalize_ghidra_decomp(None, new)
+    assert old == new
+    assert 'local_c' in ''.join(new)
+
+    changed = '''void f(void)
+{
+  int iVar6;
+  undefined4 *puVar2;
+  int iVar3;
+  void *local_c;
+
+  puVar2 = operator_new(0x10);
+  iVar3 = *(int *)(param_1 + 8);
+  iVar6 = iVar3 + 1;
+  *puVar2 = iVar6;
+  return;
+}
+'''.splitlines(keepends=True)
+    GhidraDiffEngine.normalize_ghidra_decomp(None, changed)
+    assert old != changed
