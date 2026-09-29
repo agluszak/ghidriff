@@ -1598,6 +1598,11 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         remaining[first - start:first - start] = ordered
         code[start:end] = remaining
 
+    def normalize_ghidra_decomp_for_side(self, code: list, is_old: bool,
+                                         entry_address=None, stack_setup=False):
+        """Pass image identity to engines that normalize paired addresses."""
+        self.normalize_ghidra_decomp(code, entry_address, stack_setup)
+
     def normalize_ghidra_decomp(self, code: list, entry_address=None, stack_setup=False):
         """
         Normalize some of the dynamic labels to simplify the diff
@@ -1991,13 +1996,13 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
                                or 'ExceptionList' in ematch_2['code'])
             old_address = sym.getAddress().getOffset()
             new_address = sym2.getAddress().getOffset()
-            self.normalize_ghidra_decomp(old_code, old_address, old_stack_setup)
-            self.normalize_ghidra_decomp(new_code, new_address, new_stack_setup)
+            self.normalize_ghidra_decomp_for_side(old_code, True, old_address, old_stack_setup)
+            self.normalize_ghidra_decomp_for_side(new_code, False, new_address, new_stack_setup)
 
             old_code_no_sig = self.remove_code_sig(ematch_1['code'])
             new_code_no_sig = self.remove_code_sig(ematch_2['code'])
-            self.normalize_ghidra_decomp(old_code_no_sig, old_address, old_stack_setup)
-            self.normalize_ghidra_decomp(new_code_no_sig, new_address, new_stack_setup)
+            self.normalize_ghidra_decomp_for_side(old_code_no_sig, True, old_address, old_stack_setup)
+            self.normalize_ghidra_decomp_for_side(new_code_no_sig, False, new_address, new_stack_setup)
 
             # ignore signature for ratio
             ratio = round(difflib.SequenceMatcher(None, old_code_no_sig, new_code_no_sig).ratio(), 2)
