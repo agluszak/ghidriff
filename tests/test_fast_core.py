@@ -781,3 +781,23 @@ def test_normalize_ghidra_decomp_address_labels():
         'switchD_1_caseD_2: switchdataD_0;\n',
         'switchD_0_caseD_3: joined_r0x0;\n',
     ]
+
+
+def test_normalize_ghidra_decomp_orders_simple_equality():
+    code = [
+        '  return iVar2 == iVar1;\n',
+        '  if (z != a) {\n',
+        '  return a == iVar1;\n',
+        '  return read_value() == iVar1;\n',
+        '  if (*p == value) {\n',
+    ]
+
+    GhidraDiffEngine.normalize_ghidra_decomp(None, code)
+
+    assert code == [
+        '  return iVar1 == iVar2;\n',
+        '  if (a != z) {\n',
+        '  return a == iVar1;\n',
+        '  return read_value() == iVar1;\n',
+        '  if (*p == value) {\n',
+    ]

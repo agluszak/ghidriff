@@ -1517,6 +1517,11 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
     # jumptable at 0x...", "Removing unreachable block (ram,0x...)").
     WARNING_COMMENT = re.compile(r'/\* WARNING: ')
     WARNING_ADDRESS = re.compile(r'(?<![0-9A-Za-z_])0x[0-9a-fA-F]+(?![0-9A-Za-z_])')
+    SIMPLE_EQUALITY = re.compile(
+        r'^(\s*(?:return\s+|if\s*\(\s*))'
+        r'([A-Za-z_]\w*)\s*(==|!=)\s*([A-Za-z_]\w*)'
+        r'(\s*(?:;|\)).*)$'
+    )
 
     def normalize_ghidra_decomp(self, code: list):
         """
@@ -1546,12 +1551,19 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             separator = '' if prefix.endswith('0x') else '_'
             return f'{prefix}{separator}{labels[address]}{suffix}'
 
+        def order_simple_equality(match: re.Match) -> str:
+            left, right = match.group(2), match.group(4)
+            if left > right:
+                left, right = right, left
+            return f'{match.group(1)}{left} {match.group(3)} {right}{match.group(5)}'
+
         for i, line in enumerate(code):
             line = GhidraDiffEngine.DEFAULT_LABEL.sub(rename, line)
             line = GhidraDiffEngine.ADDRESS_LABEL.sub(rename_address_label, line)
             line = GhidraDiffEngine.EXPORT_COMMENT_RVA.sub('RVA', line)
             if GhidraDiffEngine.WARNING_COMMENT.search(line):
                 line = GhidraDiffEngine.WARNING_ADDRESS.sub('ADDR', line)
+            line = GhidraDiffEngine.SIMPLE_EQUALITY.sub(order_simple_equality, line)
             code[i] = line
 
     def remove_code_sig(self, code, split_char='{'):
