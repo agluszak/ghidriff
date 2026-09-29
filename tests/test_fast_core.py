@@ -801,3 +801,23 @@ def test_normalize_ghidra_decomp_orders_simple_equality():
         '  return read_value() == iVar1;\n',
         '  if (*p == value) {\n',
     ]
+
+
+def test_normalize_ghidra_decomp_orders_independent_local_steps():
+    code = [
+        '      piVar3 = piVar3 + 1;\n',
+        '      iVar2 = iVar2 + 1;\n',
+        '      *piVar3 = 0;\n',
+        '      piVar3 = piVar3 + 1;\n',
+        '      iVar2 = iVar2 - 1;\n',
+    ]
+
+    GhidraDiffEngine.normalize_ghidra_decomp(None, code)
+
+    assert code == [
+        '      iVar2 = iVar2 + 1;\n',
+        '      piVar3 = piVar3 + 1;\n',
+        '      *piVar3 = 0;\n',
+        '      piVar3 = piVar3 + 1;\n',
+        '      iVar2 = iVar2 - 1;\n',
+    ]

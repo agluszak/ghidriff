@@ -1522,6 +1522,9 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         r'([A-Za-z_]\w*)\s*(==|!=)\s*([A-Za-z_]\w*)'
         r'(\s*(?:;|\)).*)$'
     )
+    LOCAL_STEP = re.compile(
+        r'^(?P<indent>[ \t]*)(?P<name>[A-Za-z]+Var\d+) = (?P=name) (?P<op>[+-]) 1;\n?$'
+    )
 
     def normalize_ghidra_decomp(self, code: list):
         """
@@ -1565,6 +1568,30 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
                 line = GhidraDiffEngine.WARNING_ADDRESS.sub('ADDR', line)
             line = GhidraDiffEngine.SIMPLE_EQUALITY.sub(order_simple_equality, line)
             code[i] = line
+
+        # Consecutive updates of distinct decompiler locals commute. Keep
+        # comments, memory writes and other expressions as ordering barriers.
+        i = 0
+        while i < len(code):
+            first = GhidraDiffEngine.LOCAL_STEP.fullmatch(code[i])
+            if first is None:
+                i += 1
+                continue
+            j = i + 1
+            names = {first.group('name')}
+            while j < len(code):
+                following = GhidraDiffEngine.LOCAL_STEP.fullmatch(code[j])
+                if following is None or (
+                    following.group('indent'), following.group('op')
+                ) != (first.group('indent'), first.group('op')) or following.group('name') in names:
+                    break
+                names.add(following.group('name'))
+                j += 1
+            if j - i > 1:
+                code[i:j] = sorted(
+                    code[i:j], key=lambda line: line.split(' =', 1)[0].strip()
+                )
+            i = j
 
     def remove_code_sig(self, code, split_char='{'):
         """
