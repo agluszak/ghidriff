@@ -1525,7 +1525,8 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         r'(\s*(?:;|\)).*)$'
     )
     LOCAL_STEP = re.compile(
-        r'^(?P<indent>[ \t]*)(?P<name>[A-Za-z]+Var\d+) = (?P=name) (?P<op>[+-]) 1;\n?$'
+        r'^(?P<indent>[ \t]*)(?P<name>[A-Za-z]+Var\d+) = '
+        r'(?P=name) [+-] (?:0x[0-9a-fA-F]+|\d+);\n?$'
     )
 
     def normalize_ghidra_decomp(self, code: list, entry_address=None, stack_setup=False):
@@ -1580,8 +1581,9 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             line = GhidraDiffEngine.SIMPLE_EQUALITY.sub(order_simple_equality, line)
             code[i] = line
 
-        # Consecutive updates of distinct decompiler locals commute. Keep
-        # comments, memory writes and other expressions as ordering barriers.
+        # Constant steps of distinct decompiler locals commute, regardless of
+        # step size or direction. Keep memory writes and expressions that may
+        # read another local as ordering barriers.
         i = 0
         while i < len(code):
             first = GhidraDiffEngine.LOCAL_STEP.fullmatch(code[i])
@@ -1593,8 +1595,9 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             while j < len(code):
                 following = GhidraDiffEngine.LOCAL_STEP.fullmatch(code[j])
                 if following is None or (
-                    following.group('indent'), following.group('op')
-                ) != (first.group('indent'), first.group('op')) or following.group('name') in names:
+                    following.group('indent') != first.group('indent')
+                    or following.group('name') in names
+                ):
                     break
                 names.add(following.group('name'))
                 j += 1

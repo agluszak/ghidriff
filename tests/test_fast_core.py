@@ -842,6 +842,26 @@ def test_normalize_ghidra_decomp_orders_independent_local_steps():
         '      iVar2 = iVar2 + 1;\n',
         '      piVar3 = piVar3 + 1;\n',
         '      *piVar3 = 0;\n',
-        '      piVar3 = piVar3 + 1;\n',
         '      iVar2 = iVar2 - 1;\n',
+        '      piVar3 = piVar3 + 1;\n',
+    ]
+
+
+def test_normalize_ghidra_decomp_orders_different_constant_steps():
+    code = [
+        '      uVar2 = uVar2 + 1;\n',
+        '      puVar1 = puVar1 + 4;\n',
+        '      *puVar1 = 0;\n',
+        '      puVar1 = puVar1 + 4;\n',
+        '      uVar2 = uVar2 - 1;\n',
+    ]
+
+    GhidraDiffEngine.normalize_ghidra_decomp(None, code)
+
+    assert code == [
+        '      puVar1 = puVar1 + 4;\n',
+        '      uVar2 = uVar2 + 1;\n',
+        '      *puVar1 = 0;\n',
+        '      puVar1 = puVar1 + 4;\n',
+        '      uVar2 = uVar2 - 1;\n',
     ]
