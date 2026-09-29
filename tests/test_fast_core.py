@@ -783,6 +783,28 @@ def test_normalize_ghidra_decomp_address_labels():
     ]
 
 
+def test_normalize_ghidra_decomp_stack_setup_return_addresses():
+    code = [
+        '/* WARNING: Function: __chkstk replaced with injection: alloca_probe */\n',
+        '  uStack_4 = 0x4d94ba;\n',
+        '  uStack_8 = 0x1234;\n',
+        '  return 0x4d94ba;\n',
+    ]
+
+    GhidraDiffEngine.normalize_ghidra_decomp(None, code, 0x4d94b0, True)
+
+    assert code == [
+        '/* WARNING: Function: __chkstk replaced with injection: alloca_probe */\n',
+        '  uStack_4 = RETADDR;\n',
+        '  uStack_8 = 0x1234;\n',
+        '  return 0x4d94ba;\n',
+    ]
+
+    unrelated = ['  uStack_4 = 0x4d94ba;\n']
+    GhidraDiffEngine.normalize_ghidra_decomp(None, unrelated, 0x4d94b0, False)
+    assert unrelated == ['  uStack_4 = 0x4d94ba;\n']
+
+
 def test_normalize_ghidra_decomp_orders_simple_equality():
     code = [
         '  return iVar2 == iVar1;\n',

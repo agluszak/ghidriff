@@ -1517,6 +1517,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
     # jumptable at 0x...", "Removing unreachable block (ram,0x...)").
     WARNING_COMMENT = re.compile(r'/\* WARNING: ')
     WARNING_ADDRESS = re.compile(r'(?<![0-9A-Za-z_])0x[0-9a-fA-F]+(?![0-9A-Za-z_])')
+    STACK_RETURN_ADDRESS = re.compile(r'(?P<prefix>\s*uStack_[0-9a-fA-F]+ = )(?P<address>0x[0-9a-fA-F]+)(?P<suffix>;\s*)')
     SIMPLE_EQUALITY = re.compile(
         r'^(\s*(?:return\s+|if\s*\(\s*))'
         r'((?:[A-Za-z]+Var\d+|param_\d+|local_[0-9a-fA-F]+))\s*'
@@ -1527,7 +1528,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         r'^(?P<indent>[ \t]*)(?P<name>[A-Za-z]+Var\d+) = (?P=name) (?P<op>[+-]) 1;\n?$'
     )
 
-    def normalize_ghidra_decomp(self, code: list):
+    def normalize_ghidra_decomp(self, code: list, entry_address=None, stack_setup=False):
         """
         Normalize some of the dynamic labels to simplify the diff
         ie. Translate LAB_0003234 to LAB_0,LAB_1, etc.
@@ -1562,6 +1563,15 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             return f'{match.group(1)}{left} {match.group(3)} {right}{match.group(5)}'
 
         for i, line in enumerate(code):
+            if stack_setup and entry_address is not None:
+                return_address = GhidraDiffEngine.STACK_RETURN_ADDRESS.fullmatch(line)
+                if return_address is not None:
+                    value = int(return_address.group('address'), 16)
+                    # A local holding an address in this function's prologue
+                    # is Ghidra's modeled return address for a stack probe or
+                    # SEH setup. Its relocated numeric value is not source.
+                    if entry_address <= value < entry_address + 0x80:
+                        line = return_address.group('prefix') + 'RETADDR' + return_address.group('suffix')
             line = GhidraDiffEngine.DEFAULT_LABEL.sub(rename, line)
             line = GhidraDiffEngine.ADDRESS_LABEL.sub(rename_address_label, line)
             line = GhidraDiffEngine.EXPORT_COMMENT_RVA.sub('RVA', line)
@@ -1886,13 +1896,19 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
             blocks_ratio = round(difflib.SequenceMatcher(None, old_blocks, new_blocks).ratio(), 2)
 
-            self.normalize_ghidra_decomp(old_code)
-            self.normalize_ghidra_decomp(new_code)
+            old_stack_setup = ('replaced with injection: alloca_probe' in ematch_1['code']
+                               or 'ExceptionList' in ematch_1['code'])
+            new_stack_setup = ('replaced with injection: alloca_probe' in ematch_2['code']
+                               or 'ExceptionList' in ematch_2['code'])
+            old_address = sym.getAddress().getOffset()
+            new_address = sym2.getAddress().getOffset()
+            self.normalize_ghidra_decomp(old_code, old_address, old_stack_setup)
+            self.normalize_ghidra_decomp(new_code, new_address, new_stack_setup)
 
             old_code_no_sig = self.remove_code_sig(ematch_1['code'])
             new_code_no_sig = self.remove_code_sig(ematch_2['code'])
-            self.normalize_ghidra_decomp(old_code_no_sig)
-            self.normalize_ghidra_decomp(new_code_no_sig)
+            self.normalize_ghidra_decomp(old_code_no_sig, old_address, old_stack_setup)
+            self.normalize_ghidra_decomp(new_code_no_sig, new_address, new_stack_setup)
 
             # ignore signature for ratio
             ratio = round(difflib.SequenceMatcher(None, old_code_no_sig, new_code_no_sig).ratio(), 2)
