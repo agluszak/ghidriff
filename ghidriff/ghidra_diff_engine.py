@@ -1519,7 +1519,8 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
     WARNING_ADDRESS = re.compile(r'(?<![0-9A-Za-z_])0x[0-9a-fA-F]+(?![0-9A-Za-z_])')
     SIMPLE_EQUALITY = re.compile(
         r'^(\s*(?:return\s+|if\s*\(\s*))'
-        r'([A-Za-z_]\w*)\s*(==|!=)\s*([A-Za-z_]\w*)'
+        r'((?:[A-Za-z]+Var\d+|param_\d+|local_[0-9a-fA-F]+))\s*'
+        r'(==|!=)\s*((?:[A-Za-z]+Var\d+|param_\d+|local_[0-9a-fA-F]+))'
         r'(\s*(?:;|\)).*)$'
     )
     LOCAL_STEP = re.compile(
