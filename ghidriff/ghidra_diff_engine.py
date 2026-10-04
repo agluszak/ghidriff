@@ -961,6 +961,15 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
                                         always_replace, createBookmarksEnabled)
         cmd.applyTo(program, monitor)
 
+    def analysis_scope(self, program):
+        """Optional address set for a focused analysis.
+
+        Subclasses that already know the code they will inspect can restrict
+        Ghidra's initial auto-analysis to those addresses. None keeps the
+        normal whole-program analysis.
+        """
+        return None
+
     def analyze_program(self, df_or_prog: Union["ghidra.framework.model.DomainFile", "ghidra.program.model.listing.Program"], require_symbols: bool, force_analysis: bool = False, verbose_analysis: bool = False):
 
         from ghidra.program.flatapi import FlatProgramAPI
@@ -1031,10 +1040,24 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
                     self.logger.warn(f'Disabling symbols for analysis! --no-symbols flag: {self.no_symbols}')
                     self.set_analysis_option(program, 'PDB Universal', False)
 
-                self.logger.info(f'Starting Ghidra analysis of {program}...')
+                scope = self.analysis_scope(program)
+                self.logger.info(
+                    f"Starting {'focused' if scope is not None else 'full'} Ghidra analysis of {program}..."
+                )
                 try:
                     with self.analysis_lock:
-                        flat_api.analyzeAll(program)
+                        if scope is None:
+                            flat_api.analyzeAll(program)
+                        else:
+                            from ghidra.app.plugin.core.analysis import AutoAnalysisManager
+                            manager = AutoAnalysisManager.getAnalysisManager(program)
+                            # Importing a binary can queue whole-image work before
+                            # a client gets a chance to choose a focused scope.
+                            manager.cancelQueuedTasks()
+                            manager.initializeOptions()
+                            manager.externalAdded(None)
+                            manager.reAnalyzeAll(scope)
+                            flat_api.analyzeChanges(program)
                         if hasattr(GhidraProgramUtilities, 'setAnalyzedFlag'):
                             GhidraProgramUtilities.setAnalyzedFlag(program, True)
                         elif hasattr(GhidraProgramUtilities, 'markProgramAnalyzed'):
