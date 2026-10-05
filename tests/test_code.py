@@ -113,3 +113,43 @@ def test_meaningful_differences_remain_visible(old, new, kind):
     )
     assert result.body_diff
     assert result.change_kind == kind
+
+
+@pytest.mark.parametrize('annotation', [
+    '/* 100213a0  1112  ?getModelViewScaleType@srGERD@@ */',
+    '/* RVA  1112\n                       ?getModelViewScaleType@srGERD@@ */',
+    '/* RVA  1088  ?getMatrix@srGERD@@\n                        */',
+])
+def test_pe_export_annotations_do_not_change_body(annotation):
+    plain = 'void f(void)\n{\n  return;\n}\n'
+    annotated = plain.replace('  return;', '                    ' + annotation + '\n  return;')
+    assert normalized(annotated) == normalized(plain)
+
+
+def test_export_like_literal_and_unrelated_comment_remain():
+    text = 'void f(void)\n{\n  /* RVA explains a meaningful fact */\n  use("RVA 1112 ?export");\n}\n'
+    assert '/* RVA explains a meaningful fact */' in ''.join(normalized(text))
+    assert '"RVA 1112 ?export"' in ''.join(normalized(text))
+
+
+@pytest.mark.parametrize('comparison', ['==', '!='])
+def test_same_width_word_zero_test_ignores_signedness(comparison):
+    old = normalized(f'void f(void)\n{{\n  if (*(uint *)(this + 0x24) {comparison} 0) act();\n}}\n')
+    new = normalized(f'void f(void)\n{{\n  if (*(int *)(this + 0x24) {comparison} 0) act();\n}}\n')
+    assert old == new
+
+
+@pytest.mark.parametrize('expression', [
+    '*(TYPE *)p < 15', '*(TYPE *)p != 1', '*(TYPE *)p + 2',
+    '*(TYPE *)p', '*(TYPE *)(p + 4) >= 0',
+])
+def test_word_signedness_remains_outside_zero_equality(expression):
+    old = normalized('int f(void)\n{\n  return ' + expression.replace('TYPE', 'int') + ';\n}\n')
+    new = normalized('int f(void)\n{\n  return ' + expression.replace('TYPE', 'uint') + ';\n}\n')
+    assert compare_code(old, new).body_diff
+
+
+def test_bool_value_is_not_normalized_into_a_zero_test():
+    old = normalized('int f(void)\n{\n  return *(byte *)p != 0;\n}\n')
+    new = normalized('int f(void)\n{\n  return *(byte *)p;\n}\n')
+    assert compare_code(old, new).body_diff

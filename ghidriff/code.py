@@ -111,10 +111,18 @@ ZERO_BIT_TEST = re.compile(
     r'(?P<tail>\)\s*(?:==|!=)\s*0)(?![\w])'
 )
 
-# Ghidra's PE loader comments each export as "<rva>  <ordinal>  <name>",
-# wrapping a long name onto the next line. The ordinal and name are export
-# facts; the RVA only restates placement.
-EXPORT_COMMENT_RVA = re.compile(r'(?<![0-9A-Za-z_])0x[0-9a-fA-F]+(?=  \d+(?:  \S|\s*$))')
+# A four-byte load has the same zero test whether typed int or uint.
+# Restrict this to the load in an explicit zero equality; never rewrite
+# ordering, arithmetic, returned values, declarations or other widths.
+ZERO_WORD_LOAD = re.compile(
+    r'\*\((?:uint|int)\s*\*\)\s*'
+    r'(?P<pointer>\([^()\n]+\)|[A-Za-z_]\w*)'
+    r'(?P<comparison>\s*(?:==|!=)\s*0)(?![\w])'
+)
+
+# PE export annotations are loader metadata, including wrapped decorated names.
+# Export identity is compared structurally by the caller, not as body comments.
+EXPORT_COMMENT = re.compile(r'/\*\s*(?:(?:0x)?[0-9a-fA-F]+\s+|RVA\s+)\d+\s+[^*]+\*/')
 # Decompiler warnings locate themselves by address ("Could not recover
 # jumptable at 0x...", "Removing unreachable block (ram,0x...)").
 WARNING_COMMENT = re.compile(r'/\* WARNING: ')
@@ -231,17 +239,27 @@ def normalize_code(code, entry_address=None, stack_setup=False):
             line = ADDRESS_LABEL.sub(address_label, line)
             line = SIMPLE_EQUALITY.sub(equality, line)
             line = ZERO_BIT_TEST.sub(bit_test, line)
+            line = ZERO_WORD_LOAD.sub(lambda m: f'*(uint *){m.group("pointer")}{m.group("comparison")}', line)
             lines[i] = DEFAULT_PARAMETER.sub(lambda match: f'param{int(match.group(1)) - 1}', line)
         return ''.join(lines)
 
     parts = []
+    removed_comment = False
     for kind, text in code_tokens(''.join(code)):
         if kind == 'code':
+            if removed_comment and text.startswith('\n'):
+                text = text[1:]
+            removed_comment = False
             text = spelling(text)
         elif kind == 'comment':
+            if EXPORT_COMMENT.fullmatch(text):
+                # Consume the comment-only line too, so absence is identical.
+                if parts and not parts[-1].split('\n')[-1].strip():
+                    parts[-1] = parts[-1].rstrip(' \t')
+                removed_comment = bool(parts and parts[-1].endswith('\n'))
+                continue
             lines = []
             for line in text.splitlines(True):
-                line = EXPORT_COMMENT_RVA.sub('RVA', line)
                 if WARNING_COMMENT.search(line):
                     line = WARNING_ADDRESS.sub('ADDR', line)
                 lines.append(line)
