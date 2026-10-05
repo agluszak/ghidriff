@@ -8,7 +8,6 @@ from time import time
 from datetime import datetime
 from dataclasses import dataclass
 from collections import Counter
-from importlib.metadata import PackageNotFoundError, version
 import concurrent.futures
 from queue import Queue
 from threading import Lock, RLock
@@ -165,7 +164,6 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
         app_prop = self.get_ghidra_application_info(launcher)
         self.logger.info(
             f'GHIDRA {app_prop.applicationVersion}  Build Date: {app_prop.applicationBuildDate} Release: {app_prop.applicationReleaseName}')
-        self.check_runtime_compatibility(app_prop.applicationVersion)
         self.logger.info(f"Engine Args:")
         if args is not None:
             for arg, value in vars(args).items():
@@ -237,29 +235,6 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             applicationBuildDate=app_info.build_date,
             applicationReleaseName=app_info.release_name,
         )
-
-    def check_runtime_compatibility(self, ghidra_version: str) -> None:
-        """
-        Warn when the active Ghidra/pyghidra runtime differs from the supported target.
-        """
-
-        target_ghidra = "12.1.4"
-        if str(ghidra_version) != target_ghidra:
-            self.logger.warning(
-                f"Expected Ghidra {target_ghidra}; running {ghidra_version}. "
-                "Use --force-diff only after validating runtime behavior."
-            )
-
-        try:
-            pyghidra_version = version("pyghidra")
-        except PackageNotFoundError:
-            self.logger.warning("Could not determine installed pyghidra version.")
-            return
-
-        if not pyghidra_version.startswith("3."):
-            self.logger.warning(
-                f"Expected pyghidra 3.x for Ghidra {target_ghidra}; running pyghidra {pyghidra_version}."
-            )
 
     @staticmethod
     def add_ghidra_args_to_parser(parser: argparse.ArgumentParser) -> None:

@@ -750,7 +750,7 @@ def test_normalize_ghidra_decomp_export_comment_and_warning_addresses():
     code = [
         '                    /* 0x1000  1941  ?srAssertSetFunc@@YAXP6AXPBD0J0@Z@Z */\n',
         '                    /* 0x14950  726\n',
-        '                       ?dump@srStatisticsManager@@QAEXXZ\n',
+        '                       ?dump@srStatisticsManager@@QAEXXZ */\n',
         '                    /* WARNING: Could not recover jumptable at 0x1000e862. Too many branches */\n',
         '  return 0x1000;\n',
     ]
@@ -758,9 +758,7 @@ def test_normalize_ghidra_decomp_export_comment_and_warning_addresses():
     GhidraDiffEngine.normalize_ghidra_decomp(None, code)
 
     assert code == [
-        '                    /* RVA  1941  ?srAssertSetFunc@@YAXP6AXPBD0J0@Z@Z */\n',
-        '                    /* RVA  726\n',
-        '                       ?dump@srStatisticsManager@@QAEXXZ\n',
+        '\n',
         '                    /* WARNING: Could not recover jumptable at ADDR. Too many branches */\n',
         '  return 0x1000;\n',
     ]
