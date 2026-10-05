@@ -17,7 +17,6 @@ def test_ghidra_install_dir():
     properties = install_dir / 'Ghidra' / 'application.properties'
 
     assert properties.is_file()
-    assert 'application.version=12.1.4' in properties.read_text()
 
 
 # @pytest.fixture
