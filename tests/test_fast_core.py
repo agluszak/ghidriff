@@ -946,3 +946,44 @@ def test_normalize_ghidra_decomp_auto_temporary_renumbering():
 '''.splitlines(keepends=True)
     GhidraDiffEngine.normalize_ghidra_decomp(None, changed)
     assert old != changed
+
+
+def test_decompilation_parts_skip_comment_and_quoted_braces():
+    from ghidriff.code import decompilation_parts
+
+    signature, body = decompilation_parts(
+        '/* WARNING: note { */\nvoid f(char *s = "{")\n{\n  puts("}");\n}\n'
+    )
+    assert signature == ['void f(char *s = "{")\n']
+    assert body == ['\n', '  puts("}");\n', '}\n']
+
+
+def test_decompilation_fragment_stays_body_evidence():
+    from ghidriff.code import decompilation_parts
+
+    fragment = ['  if (a < b) {\n', '    return 1;\n', '  }\n']
+    assert decompilation_parts(fragment) == ([], fragment)
+
+
+def test_signedness_kind_is_metadata_not_normalization():
+    from ghidriff.code import body_change_kind
+
+    old = ['  return *(uint *)p < 18;\n']
+    new = ['  return *(int *)p < 18;\n']
+    assert body_change_kind(old, new) == 'scalar-signedness'
+    assert old != new
+    assert body_change_kind(old, ['  return *(short *)p < 18;\n']) == 'body'
+    assert body_change_kind(old, ['  return *(int *)p < 19;\n']) == 'body'
+    assert body_change_kind(['  puts("uint");\n'], ['  puts("int");\n']) == 'body'
+    assert body_change_kind(['  /* uint */\n'], ['  /* int */\n']) == 'body'
+    assert body_change_kind(old, old) is None
+
+
+def test_signature_free_view_keeps_temporary_normalization():
+    old = ['int f(int a)\n', '{\n', '  int iVar9;\n', '\n',
+           '  iVar9 = a + 1;\n', '  return iVar9;\n', '}\n']
+    new = ['int f(uint a)\n', '{\n', '  int iVar3;\n', '\n',
+           '  iVar3 = a + 1;\n', '  return iVar3;\n', '}\n']
+    GhidraDiffEngine.normalize_ghidra_decomp(None, old)
+    GhidraDiffEngine.normalize_ghidra_decomp(None, new)
+    assert GhidraDiffEngine.remove_code_sig(None, old) == GhidraDiffEngine.remove_code_sig(None, new)

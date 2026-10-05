@@ -19,6 +19,7 @@ import logging
 
 from pyghidra.launcher import PyGhidraLauncher
 from .utils import sha1_file, get_microsoft_download_url, get_pe_extra_data
+from .code import body_change_kind, decompilation_parts
 from .markdown import GhidriffMarkdown
 
 import multiprocessing
@@ -1699,22 +1700,11 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
                 )
             i = j
 
-    def remove_code_sig(self, code, split_char='{'):
+    def remove_code_sig(self, code):
         """
-        Find the first '{' and remove everything before it
+        Extract the body, ignoring braces inside comments and quoted text.
         """
-        if code is None:
-            return []
-
-        if isinstance(code, list):
-            code = ''.join(code)
-        else:
-            code = f'{code}'
-
-        if "Failed to decompile" not in code and split_char in code:
-            return code.split(split_char, 1)[1].splitlines(True)
-
-        return code.splitlines(True)
+        return decompilation_parts(code)[1]
 
     def check_diff_preconditions(
         self,
@@ -2000,10 +1990,10 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             self.normalize_ghidra_decomp_for_side(old_code, True, old_address, old_stack_setup)
             self.normalize_ghidra_decomp_for_side(new_code, False, new_address, new_stack_setup)
 
-            old_code_no_sig = self.remove_code_sig(ematch_1['code'])
-            new_code_no_sig = self.remove_code_sig(ematch_2['code'])
-            self.normalize_ghidra_decomp_for_side(old_code_no_sig, True, old_address, old_stack_setup)
-            self.normalize_ghidra_decomp_for_side(new_code_no_sig, False, new_address, new_stack_setup)
+            # Derive both views from the same normalized function. Stripping
+            # the brace first prevents declaration-aware temporary renaming.
+            old_code_no_sig = self.remove_code_sig(old_code)
+            new_code_no_sig = self.remove_code_sig(new_code)
 
             # ignore signature for ratio
             ratio = round(difflib.SequenceMatcher(None, old_code_no_sig, new_code_no_sig).ratio(), 2)
@@ -2069,6 +2059,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             all_diff_types.extend(diff_type)
 
             modified_funcs.append({'old': ematch_1, 'new': ematch_2, 'diff': diff, 'diff_type': diff_type, 'ratio': ratio,
+                                  'code_change_kind': body_change_kind(old_code_no_sig, new_code_no_sig),
                                   'i_ratio': instructions_ratio, 'm_ratio': mnemonics_ratio, 'b_ratio': blocks_ratio, 'match_types': match_types})
 
         # Set funcs
