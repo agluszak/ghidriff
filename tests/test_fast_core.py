@@ -10,6 +10,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from ghidriff import DecompileResult, FunctionMatch, GhidraDiffEngine, get_parser
+from ghidriff.code import normalize_code
 from ghidriff.decomp_correlate import decomp_correlate
 from ghidriff.implied_matches import find_implied_matches
 from ghidriff.utils import get_pe_extra_data
@@ -842,7 +843,7 @@ def test_normalize_zero_comparisons_of_single_bit_tests():
 
     assert code == [
         '  if ((*_g_camera & 0x40) == 0) {\n',
-        '  if ((*(uint *)(param_1 + 0xa0) & 0x100) != 0) {\n',
+        '  if ((*(uint *)(param0 + 0xa0) & 0x100) != 0) {\n',
         '  if ((uVar0 & 0x20) == 0) {\n',
         '  return (uVar0 >> 5 & 1);\n',
         '  if ((left + right >> 5 & 1) == 0) {\n',
@@ -987,3 +988,19 @@ def test_signature_free_view_keeps_temporary_normalization():
     GhidraDiffEngine.normalize_ghidra_decomp(None, old)
     GhidraDiffEngine.normalize_ghidra_decomp(None, new)
     assert GhidraDiffEngine.remove_code_sig(None, old) == GhidraDiffEngine.remove_code_sig(None, new)
+
+
+def test_default_parameter_names_use_zero_based_numbering():
+    code = [
+        'void __cdecl F(int param_1,int param0)\n',
+        '{\n',
+        '  puts("param_1 stays");\n',
+        '  return param_1 + param_12 + xparam_1;\n',
+    ]
+    normalize_code(code)
+    assert code == [
+        'void __cdecl F(int param0,int param0)\n',
+        '{\n',
+        '  puts("param_1 stays");\n',
+        '  return param0 + param11 + xparam_1;\n',
+    ]

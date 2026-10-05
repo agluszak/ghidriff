@@ -19,7 +19,7 @@ import logging
 
 from pyghidra.launcher import PyGhidraLauncher
 from .utils import sha1_file, get_microsoft_download_url, get_pe_extra_data
-from .code import body_change_kind, decompilation_parts
+from .code import compare_code, decompilation_parts, normalize_code
 from .markdown import GhidriffMarkdown
 
 import multiprocessing
@@ -1499,206 +1499,13 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
 
         return '-'.join((path.name, sha1_file(path.absolute())[:6]))
 
-    # Ghidra's default names for things without a user or analysis name:
-    # LAB_00401000, DAT_00601000, FUN_00401000 (also inside PTR_DAT_... and
-    # _DAT_...). A preceding letter or digit means it is part of a longer
-    # identifier; a following word character means the hex run is not the end.
-    DEFAULT_LABEL = re.compile(r'(?<![0-9A-Za-z])(LAB|DAT|SUB|UNK|EXT|FUN|OFF)_([0-9a-fA-F]+)(?![0-9A-Za-z_])')
-    ADDRESS_LABEL = re.compile(
-        r'(?<![0-9A-Za-z_])'
-        r'(?:(switchD|switchdataD)_([0-9a-fA-F]+)((?:_caseD_\d+|_default)?)'
-        r'|(joined_r0x|code_r0x)([0-9a-fA-F]+))'
-        r'(?![0-9A-Za-z_])'
-    )
-    # A single-bit test has the same zero/nonzero result whether Ghidra
-    # renders it as a shift-and-one or as a mask. Do not rewrite the value of
-    # the expression itself: outside a zero comparison it is 0/1 vs 0/mask.
-    ZERO_BIT_TEST = re.compile(
-        r'(?P<prefix>\(\s*)(?P<operand>\*\([^()]*\)\([^()]*\)|\*[A-Za-z_]\w*|[A-Za-z_]\w*)'
-        r'\s*>>\s*(?P<shift>0x[0-9a-fA-F]+|\d+)\s*&\s*1'
-        r'(?P<tail>\)\s*(?:==|!=)\s*0)(?![\w])'
-    )
-
-    # Ghidra's PE loader comments each export as "<rva>  <ordinal>  <name>",
-    # wrapping a long name onto the next line. The ordinal and name are export
-    # facts; the RVA only restates placement.
-    EXPORT_COMMENT_RVA = re.compile(r'(?<![0-9A-Za-z_])0x[0-9a-fA-F]+(?=  \d+(?:  \S|\s*$))')
-    # Decompiler warnings locate themselves by address ("Could not recover
-    # jumptable at 0x...", "Removing unreachable block (ram,0x...)").
-    WARNING_COMMENT = re.compile(r'/\* WARNING: ')
-    WARNING_ADDRESS = re.compile(r'(?<![0-9A-Za-z_])0x[0-9a-fA-F]+(?![0-9A-Za-z_])')
-    STACK_RETURN_ADDRESS = re.compile(r'(?P<prefix>\s*uStack_[0-9a-fA-F]+ = )(?P<address>0x[0-9a-fA-F]+)(?P<suffix>;\s*)')
-    SIMPLE_EQUALITY = re.compile(
-        r'^(\s*(?:return\s+|if\s*\(\s*))'
-        r'((?:[A-Za-z]+Var\d+|param_\d+|local_[0-9a-fA-F]+))\s*'
-        r'(==|!=)\s*((?:[A-Za-z]+Var\d+|param_\d+|local_[0-9a-fA-F]+))'
-        r'(\s*(?:;|\)).*)$'
-    )
-    LOCAL_STEP = re.compile(
-        r'^(?P<indent>[ \t]*)(?P<name>[A-Za-z]+Var\d+) = '
-        r'(?P=name) [+-] (?:0x[0-9a-fA-F]+|\d+);\n?$'
-    )
-    AUTO_TEMP = re.compile(r'\b([A-Za-z]+Var)\d+\b')
-    AUTO_TEMP_DECL = re.compile(r'^\s*[^=();]+?\b([A-Za-z]+Var\d+);\s*$')
-    QUOTED_LITERAL = re.compile(r'''("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')''')
-
-    @staticmethod
-    def normalize_auto_temporaries(code: list) -> None:
-        """Name Ghidra temporaries by first use, without changing their dataflow.
-
-        Only declared auto names participate. Parameters, stack locations and
-        user symbols retain their identities. Sorting declarations is safe:
-        they have no effects, and Ghidra orders them by its arbitrary names.
-        """
-        try:
-            start = next(i for i, line in enumerate(code) if line.strip() == '{') + 1
-            end = next(i for i in range(start, len(code)) if not code[i].strip())
-        except StopIteration:
-            return
-
-        declarations = {}
-        for i in range(start, end):
-            match = GhidraDiffEngine.AUTO_TEMP_DECL.fullmatch(code[i])
-            if match is not None:
-                declarations[match.group(1)] = i
-        if not declarations:
-            return
-
-        names = {}
-        counts = Counter()
-
-        def rename(match: re.Match) -> str:
-            name = match.group(0)
-            if name not in declarations:
-                return name
-            if name not in names:
-                prefix = match.group(1)
-                names[name] = f'{prefix}{counts[prefix]}'
-                counts[prefix] += 1
-            return names[name]
-
-        for i in range(end + 1, len(code)):
-            parts = GhidraDiffEngine.QUOTED_LITERAL.split(code[i])
-            code[i] = ''.join(
-                part if j % 2 else GhidraDiffEngine.AUTO_TEMP.sub(rename, part)
-                for j, part in enumerate(parts)
-            )
-        for name in declarations:
-            if name not in names:
-                prefix = GhidraDiffEngine.AUTO_TEMP.fullmatch(name).group(1)
-                names[name] = f'{prefix}{counts[prefix]}'
-                counts[prefix] += 1
-
-        declared_indices = set(declarations.values())
-        first = min(declared_indices)
-        ordered = sorted(
-            (GhidraDiffEngine.AUTO_TEMP.sub(lambda m: names[m.group(0)], code[i])
-             for i in declared_indices),
-            key=lambda line: line.strip(),
-        )
-        remaining = [code[i] for i in range(start, end) if i not in declared_indices]
-        remaining[first - start:first - start] = ordered
-        code[start:end] = remaining
-
     def normalize_ghidra_decomp_for_side(self, code: list, is_old: bool,
                                          entry_address=None, stack_setup=False):
-        """Pass image identity to engines that normalize paired addresses."""
+        """Allow catalog-aware adapters to apply side-specific identities."""
         self.normalize_ghidra_decomp(code, entry_address, stack_setup)
 
     def normalize_ghidra_decomp(self, code: list, entry_address=None, stack_setup=False):
-        """
-        Normalize some of the dynamic labels to simplify the diff
-        ie. Translate LAB_0003234 to LAB_0,LAB_1, etc.
-        Renames based on first appearance in decompilation
-
-        """
-
-        matches = {}
-
-        def rename(match: re.Match) -> str:
-            prefix = match.group(1)
-            labels = matches.setdefault(prefix, {})
-            label = match.group(0)
-            if label not in labels:
-                labels[label] = f'{prefix}_{len(labels)}'
-            return labels[label]
-
-        def rename_address_label(match: re.Match) -> str:
-            prefix = match.group(1) or match.group(4)
-            address = match.group(2) or match.group(5)
-            suffix = match.group(3) or ''
-            labels = matches.setdefault(prefix, {})
-            if address not in labels:
-                labels[address] = len(labels)
-            separator = '' if prefix.endswith('0x') else '_'
-            return f'{prefix}{separator}{labels[address]}{suffix}'
-
-        def order_simple_equality(match: re.Match) -> str:
-            left, right = match.group(2), match.group(4)
-            if left > right:
-                left, right = right, left
-            return f'{match.group(1)}{left} {match.group(3)} {right}{match.group(5)}'
-
-        def normalize_zero_bit_test(match: re.Match) -> str:
-            spelling = match.group('shift')
-            shift = int(spelling, 16 if spelling.startswith('0x') else 10)
-            if shift >= 32:
-                return match.group(0)
-            return f"{match.group('prefix')}{match.group('operand')} & {1 << shift:#x}{match.group('tail')}"
-
-        for i, line in enumerate(code):
-            if stack_setup and entry_address is not None:
-                return_address = GhidraDiffEngine.STACK_RETURN_ADDRESS.fullmatch(line)
-                if return_address is not None:
-                    value = int(return_address.group('address'), 16)
-                    # A local holding an address in this function's prologue
-                    # is Ghidra's modeled return address for a stack probe or
-                    # SEH setup. Its relocated numeric value is not source.
-                    if entry_address <= value < entry_address + 0x80:
-                        line = return_address.group('prefix') + 'RETADDR' + return_address.group('suffix')
-            line = GhidraDiffEngine.DEFAULT_LABEL.sub(rename, line)
-            line = GhidraDiffEngine.ADDRESS_LABEL.sub(rename_address_label, line)
-            line = GhidraDiffEngine.EXPORT_COMMENT_RVA.sub('RVA', line)
-            if GhidraDiffEngine.WARNING_COMMENT.search(line):
-                line = GhidraDiffEngine.WARNING_ADDRESS.sub('ADDR', line)
-            line = GhidraDiffEngine.SIMPLE_EQUALITY.sub(order_simple_equality, line)
-            if not line.lstrip().startswith(('/*', '//', '*')):
-                parts = GhidraDiffEngine.QUOTED_LITERAL.split(line)
-                line = ''.join(
-                    part if j % 2 else GhidraDiffEngine.ZERO_BIT_TEST.sub(normalize_zero_bit_test, part)
-                    for j, part in enumerate(parts)
-                )
-            code[i] = line
-
-        GhidraDiffEngine.normalize_auto_temporaries(code)
-        for i, line in enumerate(code):
-            code[i] = GhidraDiffEngine.SIMPLE_EQUALITY.sub(order_simple_equality, line)
-
-        # Constant steps of distinct decompiler locals commute, regardless of
-        # step size or direction. Keep memory writes and expressions that may
-        # read another local as ordering barriers.
-        i = 0
-        while i < len(code):
-            first = GhidraDiffEngine.LOCAL_STEP.fullmatch(code[i])
-            if first is None:
-                i += 1
-                continue
-            j = i + 1
-            names = {first.group('name')}
-            while j < len(code):
-                following = GhidraDiffEngine.LOCAL_STEP.fullmatch(code[j])
-                if following is None or (
-                    following.group('indent') != first.group('indent')
-                    or following.group('name') in names
-                ):
-                    break
-                names.add(following.group('name'))
-                j += 1
-            if j - i > 1:
-                code[i:j] = sorted(
-                    code[i:j], key=lambda line: line.split(' =', 1)[0].strip()
-                )
-            i = j
+        normalize_code(code, entry_address, stack_setup)
 
     def remove_code_sig(self, code):
         """
@@ -1990,21 +1797,11 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             self.normalize_ghidra_decomp_for_side(old_code, True, old_address, old_stack_setup)
             self.normalize_ghidra_decomp_for_side(new_code, False, new_address, new_stack_setup)
 
-            # Derive both views from the same normalized function. Stripping
-            # the brace first prevents declaration-aware temporary renaming.
-            old_code_no_sig = self.remove_code_sig(old_code)
-            new_code_no_sig = self.remove_code_sig(new_code)
+            comparison = compare_code(old_code, new_code, ematch_1['fullname'], ematch_2['fullname'])
+            ratio = comparison.similarity
 
-            # ignore signature for ratio
-            ratio = round(difflib.SequenceMatcher(None, old_code_no_sig, new_code_no_sig).ratio(), 2)
-
-            from_file_name = ematch_1['fullname']
-            to_file_name = ematch_2['fullname']
-
-            diff = ''.join(list(difflib.unified_diff(old_code, new_code, lineterm='\n',
-                           fromfile=from_file_name, tofile=to_file_name, n=1000)))
-            only_code_diff = ''.join(list(difflib.unified_diff(old_code_no_sig, new_code_no_sig, lineterm='\n',
-                                     fromfile=from_file_name, tofile=to_file_name)))  # ignores name changes
+            diff = ''.join(comparison.full_diff)
+            only_code_diff = ''.join(comparison.body_diff)
 
             if len(only_code_diff) > 0:
 
@@ -2059,7 +1856,7 @@ class GhidraDiffEngine(GhidriffMarkdown, metaclass=ABCMeta):
             all_diff_types.extend(diff_type)
 
             modified_funcs.append({'old': ematch_1, 'new': ematch_2, 'diff': diff, 'diff_type': diff_type, 'ratio': ratio,
-                                  'code_change_kind': body_change_kind(old_code_no_sig, new_code_no_sig),
+                                  'code_change_kind': comparison.change_kind,
                                   'i_ratio': instructions_ratio, 'm_ratio': mnemonics_ratio, 'b_ratio': blocks_ratio, 'match_types': match_types})
 
         # Set funcs
