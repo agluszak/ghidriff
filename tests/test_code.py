@@ -153,3 +153,34 @@ def test_bool_value_is_not_normalized_into_a_zero_test():
     old = normalized('int f(void)\n{\n  return *(byte *)p != 0;\n}\n')
     new = normalized('int f(void)\n{\n  return *(byte *)p;\n}\n')
     assert compare_code(old, new).body_diff
+
+
+def test_parameters_are_numbered_by_declaration_after_the_receiver():
+    # Uncommitted retail prototype: the ECX input occupies slot 1.
+    old = normalized(
+        'void __thiscall F(void *this,int param_2,int *param_3)\n{\n  G(param_2,*param_3);\n}\n'
+    )
+    # Committed recomp prototype: explicit parameters follow the automatic this.
+    new = normalized(
+        'void __thiscall F(void *this,int param_1,int *param_2)\n{\n  G(param_1,*param_2);\n}\n'
+    )
+    comparison = compare_code(old, new)
+    assert not comparison.body_diff
+    assert not comparison.signature_diff
+
+
+def test_parameters_without_receiver_keep_their_order():
+    lines = normalized('int F(int param_1,int param_2)\n{\n  return param_2 - param_1;\n}\n')
+    assert 'return param1 - param0;' in ''.join(lines)
+
+
+def test_unannotated_prototype_is_the_default_convention():
+    old = normalized('void F(int param_1)\n{\n  G(param_1);\n}\n')
+    new = normalized('void __cdecl F(int param_1)\n{\n  G(param_1);\n}\n')
+    assert not compare_code(old, new).signature_diff
+
+
+def test_other_conventions_remain_signature_differences():
+    old = normalized('void __stdcall F(int param_1)\n{\n  G(param_1);\n}\n')
+    new = normalized('void F(int param_1)\n{\n  G(param_1);\n}\n')
+    assert compare_code(old, new).signature_diff

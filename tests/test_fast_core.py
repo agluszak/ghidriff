@@ -997,7 +997,7 @@ def test_default_parameter_names_use_zero_based_numbering():
     ]
     normalize_code(code)
     assert code == [
-        'void __cdecl F(int param0,int param0)\n',
+        'void F(int param0,int param0)\n',
         '{\n',
         '  puts("param_1 stays");\n',
         '  return param0 + param11 + xparam_1;\n',

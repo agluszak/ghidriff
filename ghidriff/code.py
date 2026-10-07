@@ -197,9 +197,31 @@ def normalize_auto_temporaries(code: list) -> None:
     code[start:end] = remaining
 
 
+def declared_parameter_positions(code):
+    """Default parameter names numbered by their position after any receiver.
+
+    Ghidra numbers an inferred parameter by its slot, counting the ECX input
+    of a member function whose prototype is not committed, but numbers a
+    committed prototype's explicit parameters after its automatic ``this``.
+    The declaration order is the identity both renderings share.
+    """
+    header = ''.join(decompilation_parts(code)[0])
+    opening = header.find('(')
+    closing = header.rfind(')')
+    if opening == -1 or closing < opening:
+        return {}
+    names = DEFAULT_PARAMETER.findall(header[opening + 1 : closing])
+    return {f'param_{number}': f'param{index}' for index, number in enumerate(names)}
+
+
+# An unannotated prototype is Ghidra's default convention, which is __cdecl.
+DEFAULT_CONVENTION = re.compile(r'(?<![\w])__cdecl\s+')
+
+
 def normalize_code(code, entry_address=None, stack_setup=False):
     """Apply the generic spelling policy in place; leave meaningful differences."""
     matches = {}
+    positions = declared_parameter_positions(code)
 
     def rename(match):
         labels = matches.setdefault(match.group(1), {})
@@ -240,7 +262,9 @@ def normalize_code(code, entry_address=None, stack_setup=False):
             line = SIMPLE_EQUALITY.sub(equality, line)
             line = ZERO_BIT_TEST.sub(bit_test, line)
             line = ZERO_WORD_LOAD.sub(lambda m: f'*(uint *){m.group("pointer")}{m.group("comparison")}', line)
-            lines[i] = DEFAULT_PARAMETER.sub(lambda match: f'param{int(match.group(1)) - 1}', line)
+            lines[i] = DEFAULT_PARAMETER.sub(
+                lambda match: positions.get(match.group(0), f'param{int(match.group(1)) - 1}'), line
+            )
         return ''.join(lines)
 
     parts = []
@@ -265,7 +289,11 @@ def normalize_code(code, entry_address=None, stack_setup=False):
                 lines.append(line)
             text = ''.join(lines)
         parts.append(text)
-    code[:] = ''.join(parts).splitlines(True)
+    text = ''.join(parts)
+    opening = code_only(text).find('{')
+    if opening != -1:
+        text = DEFAULT_CONVENTION.sub('', text[:opening]) + text[opening:]
+    code[:] = text.splitlines(True)
     normalize_auto_temporaries(code)
     code[:] = rewrite_code(
         ''.join(code), lambda text: ''.join(SIMPLE_EQUALITY.sub(equality, line) for line in text.splitlines(True))
